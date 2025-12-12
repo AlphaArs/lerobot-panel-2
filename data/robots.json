@@ -6,9 +6,49 @@
       "role": "leader",
       "com_port": "COM14",
       "id": "dbda2f6a-519d-4913-bbe4-19459a89acd1",
-      "has_calibration": false,
-      "calibration": null,
-      "last_seen": "2025-12-12T14:31:46.134050"
+      "has_calibration": true,
+      "calibration": {
+        "joints": [
+          {
+            "name": "base",
+            "min": -180.0,
+            "max": 180.0,
+            "current": 0.0
+          },
+          {
+            "name": "shoulder",
+            "min": -180.0,
+            "max": 180.0,
+            "current": 0.0
+          },
+          {
+            "name": "elbow",
+            "min": -180.0,
+            "max": 180.0,
+            "current": 0.0
+          },
+          {
+            "name": "wrist_pitch",
+            "min": -180.0,
+            "max": 180.0,
+            "current": 0.0
+          },
+          {
+            "name": "wrist_roll",
+            "min": -180.0,
+            "max": 180.0,
+            "current": 0.0
+          },
+          {
+            "name": "gripper",
+            "min": -180.0,
+            "max": 180.0,
+            "current": 0.0
+          }
+        ],
+        "updated_at": "2025-12-12 15:02:13.190953"
+      },
+      "last_seen": "2025-12-12T15:08:28.493836"
     }
   ]
 }

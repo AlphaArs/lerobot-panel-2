@@ -258,6 +258,16 @@ def is_valid_numpy_dtype_string(dtype_str: str) -> bool:
 
 
 def enter_pressed() -> bool:
+    flag_path = os.environ.get("LEROBOT_ENTER_FLAG")
+    if flag_path:
+        flag = Path(flag_path)
+        if flag.exists():
+            try:
+                flag.unlink()
+            except OSError:
+                pass
+            return True
+
     if platform.system() == "Windows":
         import msvcrt
 

@@ -8,10 +8,12 @@ from typing import List
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 
-from .commands import run_calibration, run_teleop
+from .calibration_manager import CalibrationManager
+from .commands import run_teleop
 from .device_monitor import DeviceMonitor
 from .models import (
     Calibration,
+    CalibrationSession,
     CalibrationStart,
     JointCalibration,
     Robot,
@@ -33,6 +35,7 @@ app.add_middleware(
 
 store = RobotStore()
 monitor = DeviceMonitor()
+calibration_manager = CalibrationManager()
 
 
 @app.on_event("startup")
@@ -128,19 +131,71 @@ def delete_robot(robot_id: str) -> dict:
     return {"deleted": True}
 
 
-@app.post("/robots/{robot_id}/calibration/start", response_model=Robot)
-def start_calibration(robot_id: str, payload: CalibrationStart) -> Robot:
+@app.post("/robots/{robot_id}/calibration/start", response_model=CalibrationSession)
+def start_calibration(robot_id: str, payload: CalibrationStart) -> CalibrationSession:
     robot = _require_robot(robot_id)
     if robot.has_calibration and not payload.override:
         raise HTTPException(status_code=409, detail="Calibration exists. Pass override=true to replace it.")
 
     dry_run = not _allow_real_commands()
-    ok, message = run_calibration(robot, dry_run=dry_run)
-    if not ok:
-        raise HTTPException(status_code=500, detail=message)
+    session_state = calibration_manager.start(robot, dry_run=dry_run)
+    if not dry_run and not session_state.running and session_state.return_code not in (0, None):
+        detail = session_state.logs[-1] if session_state.logs else "Failed to start calibration."
+        raise HTTPException(status_code=500, detail=detail)
 
     updated = store.set_calibration(robot.id, Calibration(joints=_default_joints(robot)))
-    return _with_status(updated or robot)
+    robot_with_status = _with_status(updated or robot)
+    snapshot = session_state.snapshot()
+    return CalibrationSession(
+        session_id=snapshot["session_id"],
+        robot=robot_with_status,
+        logs=snapshot["logs"],
+        running=snapshot["running"],
+        dry_run=snapshot["dry_run"],
+        return_code=snapshot["return_code"],
+    )
+
+
+@app.get("/calibration/{session_id}", response_model=CalibrationSession)
+def calibration_status(session_id: str) -> CalibrationSession:
+    state = calibration_manager.get(session_id)
+    if not state:
+        raise HTTPException(status_code=404, detail="Calibration session not found.")
+
+    robot = _with_status(_require_robot(state.robot_id))
+    snapshot = state.snapshot()
+    return CalibrationSession(
+        session_id=snapshot["session_id"],
+        robot=robot,
+        logs=snapshot["logs"],
+        running=snapshot["running"],
+        dry_run=snapshot["dry_run"],
+        return_code=snapshot["return_code"],
+    )
+
+
+@app.post("/calibration/{session_id}/enter")
+def calibration_enter(session_id: str) -> dict:
+    ok, message = calibration_manager.send_enter(session_id)
+    if not ok:
+        raise HTTPException(status_code=400, detail=message)
+    return {"sent": True, "message": message}
+
+
+@app.post("/calibration/{session_id}/stop")
+def calibration_stop(session_id: str) -> dict:
+    ok, message = calibration_manager.send_stop(session_id)
+    if not ok:
+        raise HTTPException(status_code=400, detail=message)
+    return {"sent": True, "message": message}
+
+
+@app.delete("/calibration/{session_id}")
+def calibration_cancel(session_id: str) -> dict:
+    ok, message = calibration_manager.cancel(session_id)
+    if not ok:
+        raise HTTPException(status_code=400, detail=message)
+    return {"cancelled": True, "message": message}
 
 
 @app.post("/robots/{robot_id}/calibration", response_model=Robot)

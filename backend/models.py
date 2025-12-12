@@ -60,3 +60,12 @@ class TeleopRequest(BaseModel):
 
 class CalibrationStart(BaseModel):
     override: bool = False
+
+
+class CalibrationSession(BaseModel):
+    session_id: str
+    robot: Robot
+    logs: List[str] = Field(default_factory=list)
+    running: bool = False
+    dry_run: bool = False
+    return_code: Optional[int] = None
