@@ -1,0 +1,13 @@
+{
+  "name": "lerobot-panel-electron",
+  "version": "0.1.0",
+  "private": true,
+  "main": "main.js",
+  "scripts": {
+    "dev": "set ELECTRON_START_URL=http://localhost:3000&& electron .",
+    "start": "electron ."
+  },
+  "devDependencies": {
+    "electron": "^29.4.0"
+  }
+}

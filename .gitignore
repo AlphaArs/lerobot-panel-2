@@ -1,0 +1,17 @@
+# Node
+node_modules
+frontend/.next
+frontend/node_modules
+electron/node_modules
+*.log
+
+# Python
+.venv
+__pycache__
+*.pyc
+
+# Editor
+.DS_Store
+*.swp
+.idea
+.vscode

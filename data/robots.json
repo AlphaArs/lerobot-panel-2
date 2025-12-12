@@ -1,0 +1,14 @@
+{
+  "robots": [
+    {
+      "name": "leader01",
+      "model": "so101",
+      "role": "leader",
+      "com_port": "COM14",
+      "id": "dbda2f6a-519d-4913-bbe4-19459a89acd1",
+      "has_calibration": false,
+      "calibration": null,
+      "last_seen": "2025-12-12T14:31:46.134050"
+    }
+  ]
+}
