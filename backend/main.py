@@ -153,6 +153,7 @@ def start_calibration(robot_id: str, payload: CalibrationStart) -> CalibrationSe
         running=snapshot["running"],
         dry_run=snapshot["dry_run"],
         return_code=snapshot["return_code"],
+        ranges=snapshot["ranges"],
     )
 
 
@@ -171,6 +172,7 @@ def calibration_status(session_id: str) -> CalibrationSession:
         running=snapshot["running"],
         dry_run=snapshot["dry_run"],
         return_code=snapshot["return_code"],
+        ranges=snapshot["ranges"],
     )
 
 

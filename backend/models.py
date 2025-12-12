@@ -69,3 +69,4 @@ class CalibrationSession(BaseModel):
     running: bool = False
     dry_run: bool = False
     return_code: Optional[int] = None
+    ranges: List[dict] = Field(default_factory=list)

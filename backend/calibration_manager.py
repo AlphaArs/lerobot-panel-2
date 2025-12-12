@@ -24,6 +24,7 @@ class CalibrationSessionState:
     running: bool = False
     return_code: Optional[int] = None
     dry_run: bool = False
+    ranges: dict[str, dict] = field(default_factory=dict)
 
     def snapshot(self) -> dict:
         return {
@@ -33,6 +34,7 @@ class CalibrationSessionState:
             "running": self.running,
             "return_code": self.return_code,
             "dry_run": self.dry_run,
+            "ranges": list(self.ranges.values()),
         }
 
 
@@ -63,6 +65,7 @@ class CalibrationManager:
             return state
 
         env["LEROBOT_ENTER_FLAG"] = str(enter_flag)
+        env["PYTHONUNBUFFERED"] = "1"
 
         try:
             process = subprocess.Popen(
@@ -92,12 +95,48 @@ class CalibrationManager:
     def _consume_output(self, state: CalibrationSessionState) -> None:
         if not state.process or not state.process.stdout:
             return
-        for line in iter(state.process.stdout.readline, ""):
-            clean = line.rstrip("\n")
-            if clean:
-                state.logs.append(clean)
+        buf = ""
+        while True:
+            chunk = state.process.stdout.read(1)
+            if chunk == "":
+                break
+            if chunk == "\r":
+                continue
+            if chunk == "\n":
+                self._handle_line(buf, state)
+                buf = ""
+            else:
+                buf += chunk
+        if buf:
+            self._handle_line(buf, state)
         if state.process.stdout:
             state.process.stdout.close()
+
+    def _handle_line(self, line: str, state: CalibrationSessionState) -> None:
+        clean = line.strip()
+        if not clean:
+            return
+        state.logs.append(clean)
+        parsed = self._parse_range_line(clean)
+        if parsed:
+            state.ranges[parsed["name"]] = parsed
+
+    def _parse_range_line(self, line: str) -> Optional[dict]:
+        if "|" not in line:
+            return None
+        parts = [p.strip() for p in line.split("|")]
+        if len(parts) != 4:
+            return None
+        if parts[0].lower() == "name":
+            return None
+        try:
+            name = parts[0]
+            min_val = float(parts[1])
+            pos_val = float(parts[2])
+            max_val = float(parts[3])
+        except ValueError:
+            return None
+        return {"name": name, "min": min_val, "pos": pos_val, "max": max_val}
 
     def _watch_process(self, state: CalibrationSessionState) -> None:
         if not state.process:
@@ -148,8 +187,6 @@ class CalibrationManager:
             return False, "Calibration process is not running."
 
         try:
-            if state.enter_flag:
-                state.enter_flag.touch(exist_ok=True)
             if state.process.stdin:
                 state.process.stdin.write("\n")
                 state.process.stdin.flush()
