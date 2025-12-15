@@ -5,7 +5,7 @@
   "scripts": {
     "install:frontend": "npm install --prefix frontend",
     "install:electron": "npm install --prefix electron",
-    "install:all": "npm run install:frontend && npm run install:electron",
+    "install:all": "npm run install:frontend && npm run install:electron && npm run install:backend",
     "install:backend": "python -m pip install -r backend/requirements.with-lerobot.txt",
     "postinstall": "npm run install:all",
     "dev": "concurrently -k \"npm:dev:backend\" \"npm:dev:frontend\" \"npm:dev:electron\"",

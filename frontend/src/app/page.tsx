@@ -5,12 +5,13 @@ import {
   Calibration,
   JointCalibration,
   Robot,
+  calibrationWsUrl,
+  robotsWsUrl,
   cancelCalibration,
   createRobot,
   deleteRobot,
   fetchPorts,
   fetchRobots,
-  getCalibrationSession,
   stopCalibration,
   sendCalibrationEnter,
   saveCalibration,
@@ -34,6 +35,41 @@ const defaultWizard: WizardForm = {
 
 const toMessage = (err: unknown) => (err instanceof Error ? err.message : "Request failed");
 
+const summarizeCalibrationLogs = (lines: string[]): string[] => {
+  if (!lines || lines.length === 0) return [];
+  const isHeader = (line: string) => {
+    const trimmed = line.trim().toLowerCase();
+    return trimmed.startsWith("name") && line.includes("|");
+  };
+  const isDivider = (line: string) => {
+    const trimmed = line.trim();
+    return trimmed.length >= 3 && trimmed.replace(/-/g, "") === "";
+  };
+  const headerIndexes = lines
+    .map((line, idx) => (isHeader(line) ? idx : -1))
+    .filter((idx) => idx >= 0);
+  if (headerIndexes.length === 0) {
+    return lines.slice(-400);
+  }
+
+  const firstHeader = headerIndexes[0];
+  const lastHeader = headerIndexes[headerIndexes.length - 1];
+  const prefix = lines.slice(0, firstHeader); // keep early context
+  let blockStart = lastHeader;
+  if (blockStart > 0 && isDivider(lines[blockStart - 1])) {
+    blockStart -= 1; // include divider before the latest block
+  }
+  const condensed = [...prefix, ...lines.slice(blockStart)];
+  // Drop immediate duplicate lines (common with repeated dividers).
+  const deduped: string[] = [];
+  condensed.forEach((line) => {
+    if (deduped.length === 0 || deduped[deduped.length - 1] !== line) {
+      deduped.push(line);
+    }
+  });
+  return deduped.slice(-400);
+};
+
 export default function Home() {
   const [robots, setRobots] = useState<Robot[]>([]);
   const [ports, setPorts] = useState<Record<string, string>>({});
@@ -49,6 +85,9 @@ export default function Home() {
   const [calibrationLogs, setCalibrationLogs] = useState<string[]>([]);
   const [calibrationRunning, setCalibrationRunning] = useState(false);
   const [calibrationStarted, setCalibrationStarted] = useState(false);
+  const [calibrationReturnCode, setCalibrationReturnCode] = useState<number | null>(null);
+  const [calibrationErrorModal, setCalibrationErrorModal] = useState(false);
+  const [calibrationErrorJoints, setCalibrationErrorJoints] = useState<string[]>([]);
   const [calibrationJoints, setCalibrationJoints] = useState<JointCalibration[]>([]);
   const [calibrationRanges, setCalibrationRanges] = useState<
     Record<string, { name: string; min: number; pos: number; max: number }>
@@ -56,6 +95,10 @@ export default function Home() {
   const [teleopSelection, setTeleopSelection] = useState<Record<string, string>>({});
   const [activeTeleop, setActiveTeleop] = useState<{ leaderId: string; followerId: string } | null>(
     null
+  );
+  const displayedCalibrationLogs = useMemo(
+    () => summarizeCalibrationLogs(calibrationLogs),
+    [calibrationLogs]
   );
 
   const refreshAll = useCallback(async () => {
@@ -75,6 +118,43 @@ export default function Home() {
   useEffect(() => {
     refreshAll();
   }, [refreshAll]);
+
+  useEffect(() => {
+    let socket: WebSocket | null = null;
+    let stopped = false;
+    let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+
+    const connect = () => {
+      if (stopped) return;
+      socket = new WebSocket(robotsWsUrl);
+
+      socket.onmessage = (event) => {
+        if (stopped) return;
+        try {
+          const payload = JSON.parse(event.data);
+          if (payload?.type === "fleet_status") {
+            setRobots(payload.robots || []);
+            setPorts(payload.ports || {});
+          }
+        } catch {
+          // ignore malformed payloads
+        }
+      };
+
+      socket.onclose = () => {
+        if (stopped) return;
+        reconnectTimer = setTimeout(connect, 1500);
+      };
+    };
+
+    connect();
+
+    return () => {
+      stopped = true;
+      if (reconnectTimer) clearTimeout(reconnectTimer);
+      if (socket) socket.close();
+    };
+  }, []);
 
   const refreshRobots = async () => {
     try {
@@ -155,6 +235,7 @@ export default function Home() {
       setCalibrationSessionId(res.session_id);
       setCalibrationLogs(res.logs || []);
       setCalibrationRunning(res.running);
+      setCalibrationReturnCode(res.return_code ?? null);
       setCalibrationRanges(
         (res.ranges || []).reduce((acc, row) => {
           acc[row.name] = row;
@@ -196,6 +277,9 @@ export default function Home() {
     setCalibrationRunning(false);
     setCalibrationRanges({});
     setCalibrationStarted(false);
+    setCalibrationReturnCode(null);
+    setCalibrationErrorModal(false);
+    setCalibrationErrorJoints([]);
   };
 
   useEffect(() => {
@@ -212,30 +296,67 @@ export default function Home() {
 
   useEffect(() => {
     if (!calibrationSessionId) return;
-    let active = true;
-    const timer = setInterval(async () => {
-      try {
-        const status = await getCalibrationSession(calibrationSessionId);
-        if (!active) return;
-        setCalibrationLogs(status.logs || []);
-        setCalibrationRunning(status.running);
-        setCalibrationRanges(
-          (status.ranges || []).reduce((acc, row) => {
-            acc[row.name] = row;
-            return acc;
-          }, {} as Record<string, { name: string; min: number; pos: number; max: number }>)
-        );
-        if (status.robot) {
-          setCalibrationTarget(status.robot);
+    let stopped = false;
+    let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+    let socket: WebSocket | null = null;
+
+    const connect = () => {
+      if (stopped || !calibrationSessionId) return;
+      socket = new WebSocket(calibrationWsUrl(calibrationSessionId));
+
+      socket.onmessage = (event) => {
+        if (stopped) return;
+        try {
+          const payload = JSON.parse(event.data);
+          if (payload?.error) {
+            const friendly =
+              payload.error === "not_found"
+                ? "Calibration session closed."
+                : payload.error === "robot_missing"
+                  ? "Robot disappeared during calibration."
+                  : "Calibration stream error.";
+            setError(friendly);
+            setCalibrationSessionId(null);
+            setCalibrationRunning(false);
+            setCalibrationRanges({});
+            setCalibrationLogs([]);
+            setCalibrationStarted(false);
+            setCalibrationReady(false);
+            setCalibrationTarget(null);
+            return;
+          }
+          setCalibrationLogs(payload.logs || []);
+          setCalibrationRunning(Boolean(payload.running));
+          setCalibrationReturnCode(
+            typeof payload.return_code === "number" ? payload.return_code : null
+          );
+          setCalibrationRanges(
+            (payload.ranges || []).reduce((acc, row) => {
+              acc[row.name] = row;
+              return acc;
+            }, {} as Record<string, { name: string; min: number; pos: number; max: number }>)
+          );
+          if (payload.robot) {
+            setCalibrationTarget(payload.robot as Robot);
+          }
+        } catch (err) {
+          if (stopped) return;
+          setError(toMessage(err));
         }
-      } catch (err) {
-        if (!active) return;
-        setError(toMessage(err));
-      }
-    }, 1500);
+      };
+
+      socket.onclose = () => {
+        if (stopped) return;
+        reconnectTimer = setTimeout(connect, 1000);
+      };
+    };
+
+    connect();
+
     return () => {
-      active = false;
-      clearInterval(timer);
+      stopped = true;
+      if (reconnectTimer) clearTimeout(reconnectTimer);
+      if (socket) socket.close();
     };
   }, [calibrationSessionId]);
 
@@ -258,6 +379,30 @@ export default function Home() {
     setCalibrationStarted(false);
     setMessage("Calibration stopped. Review the captured ranges and save.");
   }, [calibrationSessionId, calibrationStarted, calibrationRunning, calibrationRanges, calibrationReady]);
+
+  const calibrationFailed =
+    !calibrationRunning && calibrationReturnCode !== null && calibrationReturnCode !== 0;
+
+  const extractUnmovedJoints = (logs: string[]): string[] => {
+    const idx = logs.findIndex((line) => line.includes("Some motors have the same min and max values"));
+    if (idx === -1) return [];
+    const slice = logs.slice(idx, idx + 6).join(" ");
+    const match = slice.match(/\[([^\]]+)\]/);
+    if (!match) return [];
+    return match[1]
+      .replace(/['"]/g, "")
+      .split(",")
+      .map((s) => s.trim())
+      .filter(Boolean);
+  };
+
+  useEffect(() => {
+    if (calibrationFailed) {
+      const stuck = extractUnmovedJoints(displayedCalibrationLogs);
+      setCalibrationErrorJoints(stuck);
+      setCalibrationErrorModal(true);
+    }
+  }, [calibrationFailed, displayedCalibrationLogs]);
 
   const calibrationSteps = [
     {
@@ -300,7 +445,13 @@ export default function Home() {
       await stopCalibration(calibrationSessionId);
       setMessage("Stop ENTER sent. Waiting for calibration to finish...");
     } catch (err) {
-      setError(toMessage(err));
+      // Try a plain ENTER as a fallback if the dedicated stop call fails.
+      try {
+        await sendCalibrationEnter(calibrationSessionId);
+        setMessage("Stop request retried via ENTER. Waiting for calibration to finish...");
+      } catch (fallbackErr) {
+        setError(toMessage(fallbackErr));
+      }
     }
   };
 
@@ -729,12 +880,23 @@ export default function Home() {
               >
                 {!calibrationSessionId ? (
                   <span className="muted">No session yet.</span>
-                ) : calibrationLogs.length === 0 ? (
+                ) : displayedCalibrationLogs.length === 0 ? (
                   <span className="muted">Waiting for logs...</span>
                 ) : (
-                  calibrationLogs.map((line, idx) => <div key={`${idx}-${line}`}>{line}</div>)
+                  displayedCalibrationLogs.map((line, idx) => <div key={`${idx}-${line}`}>{line}</div>)
                 )}
               </div>
+              {calibrationFailed && (
+                <div className="notice" style={{ marginTop: 8 }}>
+                  Calibration failed.{" "}
+                  {(() => {
+                    const stuck = extractUnmovedJoints(displayedCalibrationLogs);
+                    if (stuck.length === 0) return "One or more joints did not move.";
+                    return `These joints did not move: ${stuck.join(", ")}.`;
+                  })()}
+                  {" "}Move them through their range and restart.
+                </div>
+              )}
             </div>
 
             <div className="panel" style={{ padding: 12, marginTop: 10 }}>
@@ -753,7 +915,7 @@ export default function Home() {
                     <th>Min</th>
                     <th>Current</th>
                     <th>Max</th>
-                    <th>Range</th>
+                    <th>Range / position</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -764,15 +926,34 @@ export default function Home() {
                       </td>
                     </tr>
                   ) : (
-                    Object.values(calibrationRanges).map((row) => (
-                      <tr key={row.name}>
-                        <td>{row.name}</td>
-                        <td>{row.min.toFixed(0)}</td>
-                        <td>{row.pos.toFixed(0)}</td>
-                        <td>{row.max.toFixed(0)}</td>
-                        <td>{(row.max - row.min).toFixed(0)}</td>
-                      </tr>
-                    ))
+                    Object.values(calibrationRanges).map((row) => {
+                      const span = row.max - row.min;
+                      const safeSpan = span === 0 ? 1 : span;
+                      const percent = Math.max(0, Math.min(100, ((row.pos - row.min) / safeSpan) * 100));
+                      const delta = Math.abs(span);
+                      return (
+                        <tr key={row.name}>
+                          <td>{row.name}</td>
+                          <td>{row.min.toFixed(0)}</td>
+                          <td>{row.pos.toFixed(0)}</td>
+                          <td>{row.max.toFixed(0)}</td>
+                          <td>
+                            <div className="range-meter">
+                              <div className="range-meter__track">
+                                <div className="range-meter__marker" style={{ left: `${percent}%` }} />
+                              </div>
+                              <div
+                                className="row"
+                                style={{ justifyContent: "space-between", fontSize: 12, color: "var(--muted)" }}
+                              >
+                                <span>Δ {delta.toFixed(0)}</span>
+                                <span>{percent.toFixed(0)}%</span>
+                              </div>
+                            </div>
+                          </td>
+                        </tr>
+                      );
+                    })
                   )}
                 </tbody>
               </table>
@@ -784,7 +965,7 @@ export default function Home() {
                   <button
                     className="btn btn-primary"
                     onClick={calibrationStarted ? stopCalibrationSweep : sendEnterToCalibration}
-                    disabled={!calibrationSessionId}
+                    disabled={!calibrationSessionId || calibrationFailed}
                   >
                     {calibrationStarted ? "End calibration" : "Start calibration"}
                   </button>
@@ -800,6 +981,20 @@ export default function Home() {
                 {calibrationTarget.has_calibration && <span className="muted">Override enabled.</span>}
                 {!calibrationRunning && !calibrationReady && (
                   <span className="muted">Calibration process not running.</span>
+                )}
+                {calibrationFailed && (
+                  <div className="row" style={{ gap: 8, flexWrap: "wrap" }}>
+                    <button
+                      className="btn"
+                      onClick={() => {
+                        if (calibrationTarget) {
+                          handleCalibrate(calibrationTarget);
+                        }
+                      }}
+                    >
+                      Restart calibration
+                    </button>
+                  </div>
                 )}
               </div>
             ) : (
@@ -818,6 +1013,53 @@ export default function Home() {
                 </div>
               </div>
             )}
+          </div>
+        </div>
+      )}
+
+      {calibrationErrorModal && (
+        <div className="modal">
+          <div className="panel" style={{ maxWidth: 480, width: "100%" }}>
+            <div className="row">
+              <h3>Calibration failed</h3>
+              <div className="spacer" />
+              <button className="btn btn-ghost" onClick={() => setCalibrationErrorModal(false)}>
+                Close
+              </button>
+            </div>
+            <p className="notice" style={{ marginTop: 8 }}>
+              The calibration process exited with an error.{" "}
+              {calibrationErrorJoints.length > 0
+                ? `These joints did not move: ${calibrationErrorJoints.join(", ")}.`
+                : "One or more joints did not move during the sweep."}
+            </p>
+            <p className="muted">
+              Move all joints through their full range, then restart the calibration sweep.
+            </p>
+            <div className="divider" />
+            <div className="row" style={{ gap: 8 }}>
+              <button
+                className="btn"
+                onClick={() => {
+                  setCalibrationErrorModal(false);
+                  if (calibrationTarget) {
+                    cleanupCalibrationSession();
+                    handleCalibrate(calibrationTarget);
+                  }
+                }}
+              >
+                Restart calibration
+              </button>
+              <button
+                className="btn btn-ghost"
+                onClick={() => {
+                  setCalibrationErrorModal(false);
+                  cancelCalibrationFlow();
+                }}
+              >
+                Cancel
+              </button>
+            </div>
           </div>
         </div>
       )}

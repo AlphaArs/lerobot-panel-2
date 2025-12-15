@@ -4,51 +4,11 @@
       "name": "leader01",
       "model": "so101",
       "role": "leader",
-      "com_port": "COM14",
-      "id": "dbda2f6a-519d-4913-bbe4-19459a89acd1",
-      "has_calibration": true,
-      "calibration": {
-        "joints": [
-          {
-            "name": "base",
-            "min": -180.0,
-            "max": 180.0,
-            "current": 0.0
-          },
-          {
-            "name": "shoulder",
-            "min": -180.0,
-            "max": 180.0,
-            "current": 0.0
-          },
-          {
-            "name": "elbow",
-            "min": -180.0,
-            "max": 180.0,
-            "current": 0.0
-          },
-          {
-            "name": "wrist_pitch",
-            "min": -180.0,
-            "max": 180.0,
-            "current": 0.0
-          },
-          {
-            "name": "wrist_roll",
-            "min": -180.0,
-            "max": 180.0,
-            "current": 0.0
-          },
-          {
-            "name": "gripper",
-            "min": -180.0,
-            "max": 180.0,
-            "current": 0.0
-          }
-        ],
-        "updated_at": "2025-12-12 15:22:40.780241"
-      },
-      "last_seen": "2025-12-12T15:24:01.079880"
+      "com_port": "COM10",
+      "id": "f152d277-eccb-4940-9cac-456c8c7f4be7",
+      "has_calibration": false,
+      "calibration": null,
+      "last_seen": "2025-12-15T13:40:15.901453"
     }
   ]
 }

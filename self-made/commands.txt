@@ -1,3 +1,6 @@
+.venv\Scripts\Activate.ps1
+
+
 open anaconda prompt
 
 cd Downloads\lerobot\lerobot

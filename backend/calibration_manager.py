@@ -43,6 +43,26 @@ class CalibrationManager:
         self._sessions: dict[str, CalibrationSessionState] = {}
         self._lock = Lock()
 
+    def _write_stdin_newline(self, state: CalibrationSessionState) -> bool:
+        try:
+            if state.process and state.process.stdin:
+                state.process.stdin.write("\n")
+                state.process.stdin.flush()
+                return True
+        except Exception:
+            return False
+        return False
+
+    def _touch_flag(self, state: CalibrationSessionState) -> bool:
+        flag = state.enter_flag
+        if not flag:
+            return False
+        try:
+            flag.touch()
+            return True
+        except OSError:
+            return False
+
     def start(self, robot: Robot, *, dry_run: bool = False) -> CalibrationSessionState:
         session_id = uuid.uuid4().hex
         cmd = build_calibration_cmd(robot)
@@ -168,13 +188,11 @@ class CalibrationManager:
             state.running = False
             return False, "Calibration process is not running."
 
-        try:
-            if state.process.stdin:
-                state.process.stdin.write("\n")
-                state.process.stdin.flush()
-        except Exception as exc:
-            return False, f"Failed to send input: {exc}"
-        return True, "ENTER sent."
+        stdin_ok = self._write_stdin_newline(state)
+        state.logs.append(f"[panel] start request (flag=False, stdin={stdin_ok})")
+        if stdin_ok:
+            return True, "ENTER sent."
+        return False, "Failed to send ENTER (stdin unavailable)."
 
     def send_stop(self, session_id: str) -> tuple[bool, str]:
         state = self.get(session_id)
@@ -186,13 +204,12 @@ class CalibrationManager:
             state.running = False
             return False, "Calibration process is not running."
 
-        try:
-            if state.process.stdin:
-                state.process.stdin.write("\n")
-                state.process.stdin.flush()
-        except Exception as exc:
-            return False, f"Failed to send input: {exc}"
-        return True, "Stop ENTER sent."
+        flag_ok = self._touch_flag(state)
+        stdin_ok = self._write_stdin_newline(state) if not flag_ok else False
+        state.logs.append(f"[panel] stop request (flag={flag_ok}, stdin={stdin_ok})")
+        if flag_ok or stdin_ok:
+            return True, "Stop ENTER sent."
+        return False, "Failed to send stop ENTER."
 
     def cancel(self, session_id: str) -> tuple[bool, str]:
         state = self.get(session_id)

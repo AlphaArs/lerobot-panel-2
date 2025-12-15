@@ -221,6 +221,31 @@ td input {
   gap: 10px;
 }
 
+.range-meter {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.range-meter__track {
+  position: relative;
+  height: 8px;
+  border-radius: 999px;
+  background: rgba(127, 232, 195, 0.14);
+  overflow: hidden;
+}
+
+.range-meter__marker {
+  position: absolute;
+  top: -3px;
+  width: 12px;
+  height: 14px;
+  border-radius: 8px;
+  background: var(--accent);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.35);
+  transform: translateX(-50%);
+}
+
 @media (max-width: 768px) {
   .page {
     padding: 16px;

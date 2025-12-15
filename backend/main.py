@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import asyncio
 import importlib.util
+import json
 import os
 from datetime import datetime
 from typing import List
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 
 from .calibration_manager import CalibrationManager
@@ -137,13 +139,19 @@ def start_calibration(robot_id: str, payload: CalibrationStart) -> CalibrationSe
     if robot.has_calibration and not payload.override:
         raise HTTPException(status_code=409, detail="Calibration exists. Pass override=true to replace it.")
 
+    if payload.override and robot.has_calibration:
+        cleared = store.clear_calibration(robot.id)
+        robot = cleared or robot
+
     dry_run = not _allow_real_commands()
     session_state = calibration_manager.start(robot, dry_run=dry_run)
     if not dry_run and not session_state.running and session_state.return_code not in (0, None):
         detail = session_state.logs[-1] if session_state.logs else "Failed to start calibration."
         raise HTTPException(status_code=500, detail=detail)
 
-    updated = store.set_calibration(robot.id, Calibration(joints=_default_joints(robot)))
+    updated: Robot | None = None
+    if not payload.override:
+        updated = store.set_calibration(robot.id, Calibration(joints=_default_joints(robot)))
     robot_with_status = _with_status(updated or robot)
     snapshot = session_state.snapshot()
     return CalibrationSession(
@@ -235,3 +243,59 @@ def start_teleop(payload: TeleopRequest) -> dict:
         raise HTTPException(status_code=500, detail=message)
 
     return {"message": message, "dry_run": dry_run}
+
+
+@app.websocket("/ws/robots")
+async def robots_stream(websocket: WebSocket) -> None:
+    await websocket.accept()
+    last_payload: str | None = None
+    try:
+        while True:
+            robots = [_with_status(r) for r in store.list()]
+            ports = monitor.snapshot()
+            payload = {
+                "type": "fleet_status",
+                "robots": [r.model_dump(mode="json") for r in robots],
+                "ports": ports,
+            }
+            serialized = json.dumps(payload, sort_keys=True)
+            if serialized != last_payload:
+                await websocket.send_json(payload)
+                last_payload = serialized
+            await asyncio.sleep(2)
+    except WebSocketDisconnect:
+        return
+
+
+@app.websocket("/ws/calibration/{session_id}")
+async def calibration_stream(websocket: WebSocket, session_id: str) -> None:
+    await websocket.accept()
+    try:
+        while True:
+            state = calibration_manager.get(session_id)
+            if not state:
+                await websocket.send_json({"error": "not_found", "session_id": session_id})
+                await websocket.close(code=4404)
+                return
+
+            try:
+                robot = _with_status(_require_robot(state.robot_id))
+            except HTTPException:
+                await websocket.send_json({"error": "robot_missing", "session_id": session_id})
+                await websocket.close(code=4404)
+                return
+
+            snapshot = state.snapshot()
+            payload = {
+                "session_id": snapshot["session_id"],
+                "robot": robot.model_dump(mode="json"),
+                "logs": snapshot["logs"],
+                "running": snapshot["running"],
+                "dry_run": snapshot["dry_run"],
+                "return_code": snapshot["return_code"],
+                "ranges": snapshot["ranges"],
+            }
+            await websocket.send_json(payload)
+            await asyncio.sleep(0.5)
+    except WebSocketDisconnect:
+        return

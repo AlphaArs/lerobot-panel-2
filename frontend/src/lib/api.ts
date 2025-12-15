@@ -35,7 +35,10 @@ export type Robot = {
   calibration?: Calibration | null;
 };
 
-const API_BASE = process.env.NEXT_PUBLIC_API_BASE || "http://localhost:8000";
+export const API_BASE = process.env.NEXT_PUBLIC_API_BASE || "http://localhost:8000";
+const WS_BASE = API_BASE.replace(/^http/i, "ws");
+export const robotsWsUrl = `${WS_BASE}/ws/robots`;
+export const calibrationWsUrl = (sessionId: string) => `${WS_BASE}/ws/calibration/${sessionId}`;
 
 async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
   const res = await fetch(`${API_BASE}${path}`, {
