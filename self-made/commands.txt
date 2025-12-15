@@ -1,0 +1,53 @@
+open anaconda prompt
+
+cd Downloads\lerobot\lerobot
+
+conda activate lerobot
+
+C:\Users\Mathieu\.cache\huggingface\lerobot\calibration\teleoperators\so101_leader
+
+
+lerobot-find-port   
+
+
+
+
+
+lerobot-setup-motors --robot.type=so101_follower --robot.port=COM13
+
+
+
+lerobot-calibrate --robot.type=so101_follower --robot.port=COM13 --robot.id=my_awesome_follower_arm
+
+
+
+
+lerobot-setup-motors --teleop.type=so101_leader --teleop.port=COM14
+
+
+
+lerobot-calibrate --robot.type=so101_follower --robot.port=COM13 --robot.id=follower_arm
+
+
+lerobot-calibrate --teleop.type=so101_leader --teleop.port=COM14 --teleop.id=leader_arm
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+lerobot-teleoperate --robot.type=so101_follower --robot.port=COM13 --robot.id=follower_arm --teleop.type=so101_leader --teleop.port=COM14 --teleop.id=leader_arm
+
+
+
+lerobot-find-cameras opencv
