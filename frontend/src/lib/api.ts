@@ -115,6 +115,16 @@ export function sendCalibrationEnter(sessionId: string): Promise<{ sent: boolean
   });
 }
 
+export function sendCalibrationInput(
+  sessionId: string,
+  data: string
+): Promise<{ sent: boolean; message: string }> {
+  return request<{ sent: boolean; message: string }>(`/calibration/${sessionId}/input`, {
+    method: "POST",
+    body: JSON.stringify({ data }),
+  });
+}
+
 export function stopCalibration(sessionId: string): Promise<{ sent: boolean; message: string }> {
   return request<{ sent: boolean; message: string }>(`/calibration/${sessionId}/stop`, {
     method: "POST",

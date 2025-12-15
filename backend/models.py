@@ -62,6 +62,10 @@ class CalibrationStart(BaseModel):
     override: bool = False
 
 
+class CalibrationInput(BaseModel):
+    data: str = ""
+
+
 class CalibrationSession(BaseModel):
     session_id: str
     robot: Robot

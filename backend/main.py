@@ -17,7 +17,7 @@ from .models import (
     Calibration,
     CalibrationSession,
     CalibrationStart,
-    JointCalibration,
+    CalibrationInput,
     Robot,
     RobotCreate,
     SUPPORTED_MODELS,
@@ -80,20 +80,6 @@ def _require_robot(robot_id: str) -> Robot:
     return robot
 
 
-def _default_joints(robot: Robot) -> list[JointCalibration]:
-    names = [
-        "base",
-        "shoulder",
-        "elbow",
-        "wrist_pitch",
-        "wrist_roll",
-        "gripper",
-    ]
-    return [
-        JointCalibration(name=name, min=-180.0, max=180.0, current=0.0) for name in names
-    ]
-
-
 @app.get("/health")
 def health() -> dict:
     return {"status": "ok"}
@@ -136,12 +122,6 @@ def delete_robot(robot_id: str) -> dict:
 @app.post("/robots/{robot_id}/calibration/start", response_model=CalibrationSession)
 def start_calibration(robot_id: str, payload: CalibrationStart) -> CalibrationSession:
     robot = _require_robot(robot_id)
-    if robot.has_calibration and not payload.override:
-        raise HTTPException(status_code=409, detail="Calibration exists. Pass override=true to replace it.")
-
-    if payload.override and robot.has_calibration:
-        cleared = store.clear_calibration(robot.id)
-        robot = cleared or robot
 
     dry_run = not _allow_real_commands()
     session_state = calibration_manager.start(robot, dry_run=dry_run)
@@ -149,10 +129,7 @@ def start_calibration(robot_id: str, payload: CalibrationStart) -> CalibrationSe
         detail = session_state.logs[-1] if session_state.logs else "Failed to start calibration."
         raise HTTPException(status_code=500, detail=detail)
 
-    updated: Robot | None = None
-    if not payload.override:
-        updated = store.set_calibration(robot.id, Calibration(joints=_default_joints(robot)))
-    robot_with_status = _with_status(updated or robot)
+    robot_with_status = _with_status(robot)
     snapshot = session_state.snapshot()
     return CalibrationSession(
         session_id=snapshot["session_id"],
@@ -187,6 +164,14 @@ def calibration_status(session_id: str) -> CalibrationSession:
 @app.post("/calibration/{session_id}/enter")
 def calibration_enter(session_id: str) -> dict:
     ok, message = calibration_manager.send_enter(session_id)
+    if not ok:
+        raise HTTPException(status_code=400, detail=message)
+    return {"sent": True, "message": message}
+
+
+@app.post("/calibration/{session_id}/input")
+def calibration_input(session_id: str, payload: CalibrationInput) -> dict:
+    ok, message = calibration_manager.send_input(session_id, payload.data)
     if not ok:
         raise HTTPException(status_code=400, detail=message)
     return {"sent": True, "message": message}

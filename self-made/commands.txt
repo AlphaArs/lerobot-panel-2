@@ -35,6 +35,9 @@ lerobot-calibrate --robot.type=so101_follower --robot.port=COM13 --robot.id=foll
 lerobot-calibrate --teleop.type=so101_leader --teleop.port=COM14 --teleop.id=leader_arm
 
 
+lerobot-calibrate --teleop.type=so101_leader --teleop.port=COM10 --teleop.id=leader_arm
+
+
 
 
 

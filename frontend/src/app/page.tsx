@@ -14,6 +14,7 @@ import {
   fetchRobots,
   stopCalibration,
   sendCalibrationEnter,
+  sendCalibrationInput,
   saveCalibration,
   startCalibration,
   startTeleop,
@@ -35,41 +36,6 @@ const defaultWizard: WizardForm = {
 
 const toMessage = (err: unknown) => (err instanceof Error ? err.message : "Request failed");
 
-const summarizeCalibrationLogs = (lines: string[]): string[] => {
-  if (!lines || lines.length === 0) return [];
-  const isHeader = (line: string) => {
-    const trimmed = line.trim().toLowerCase();
-    return trimmed.startsWith("name") && line.includes("|");
-  };
-  const isDivider = (line: string) => {
-    const trimmed = line.trim();
-    return trimmed.length >= 3 && trimmed.replace(/-/g, "") === "";
-  };
-  const headerIndexes = lines
-    .map((line, idx) => (isHeader(line) ? idx : -1))
-    .filter((idx) => idx >= 0);
-  if (headerIndexes.length === 0) {
-    return lines.slice(-400);
-  }
-
-  const firstHeader = headerIndexes[0];
-  const lastHeader = headerIndexes[headerIndexes.length - 1];
-  const prefix = lines.slice(0, firstHeader); // keep early context
-  let blockStart = lastHeader;
-  if (blockStart > 0 && isDivider(lines[blockStart - 1])) {
-    blockStart -= 1; // include divider before the latest block
-  }
-  const condensed = [...prefix, ...lines.slice(blockStart)];
-  // Drop immediate duplicate lines (common with repeated dividers).
-  const deduped: string[] = [];
-  condensed.forEach((line) => {
-    if (deduped.length === 0 || deduped[deduped.length - 1] !== line) {
-      deduped.push(line);
-    }
-  });
-  return deduped.slice(-400);
-};
-
 export default function Home() {
   const [robots, setRobots] = useState<Robot[]>([]);
   const [ports, setPorts] = useState<Record<string, string>>({});
@@ -86,6 +52,12 @@ export default function Home() {
   const [calibrationRunning, setCalibrationRunning] = useState(false);
   const [calibrationStarted, setCalibrationStarted] = useState(false);
   const [calibrationReturnCode, setCalibrationReturnCode] = useState<number | null>(null);
+  const [calibrationOverridePrompt, setCalibrationOverridePrompt] = useState<{
+    sessionId: string;
+    line: string;
+    ready: boolean;
+  } | null>(null);
+  const [calibrationOverrideHandled, setCalibrationOverrideHandled] = useState(false);
   const [calibrationErrorModal, setCalibrationErrorModal] = useState(false);
   const [calibrationErrorJoints, setCalibrationErrorJoints] = useState<string[]>([]);
   const [calibrationJoints, setCalibrationJoints] = useState<JointCalibration[]>([]);
@@ -96,10 +68,7 @@ export default function Home() {
   const [activeTeleop, setActiveTeleop] = useState<{ leaderId: string; followerId: string } | null>(
     null
   );
-  const displayedCalibrationLogs = useMemo(
-    () => summarizeCalibrationLogs(calibrationLogs),
-    [calibrationLogs]
-  );
+  const displayedCalibrationLogs = useMemo(() => calibrationLogs, [calibrationLogs]);
 
   const refreshAll = useCallback(async () => {
     setLoading(true);
@@ -214,12 +183,6 @@ export default function Home() {
   };
 
   const handleCalibrate = async (robot: Robot) => {
-    if (robot.has_calibration) {
-      const ok = confirm(
-        `${robot.name} already has a calibration.\nDo you want to override it?`
-      );
-      if (!ok) return;
-    }
     if (calibrationSessionId) {
       try {
         await cancelCalibration(calibrationSessionId);
@@ -230,8 +193,10 @@ export default function Home() {
     }
     setLoading(true);
     setError(null);
+    setCalibrationOverridePrompt(null);
+    setCalibrationOverrideHandled(false);
     try {
-      const res = await startCalibration(robot.id, robot.has_calibration);
+      const res = await startCalibration(robot.id, false);
       setCalibrationSessionId(res.session_id);
       setCalibrationLogs(res.logs || []);
       setCalibrationRunning(res.running);
@@ -280,6 +245,8 @@ export default function Home() {
     setCalibrationReturnCode(null);
     setCalibrationErrorModal(false);
     setCalibrationErrorJoints([]);
+    setCalibrationOverridePrompt(null);
+    setCalibrationOverrideHandled(false);
   };
 
   useEffect(() => {
@@ -361,6 +328,34 @@ export default function Home() {
   }, [calibrationSessionId]);
 
   useEffect(() => {
+    if (!calibrationSessionId) {
+      setCalibrationOverridePrompt(null);
+      return;
+    }
+    if (
+      calibrationOverridePrompt &&
+      calibrationOverridePrompt.sessionId !== calibrationSessionId
+    ) {
+      setCalibrationOverridePrompt(null);
+    }
+    const promptLine = calibrationLogs.find((line) =>
+      line.toLowerCase().includes("press enter to use provided calibration file associated with the id")
+    );
+    if (
+      promptLine &&
+      !calibrationOverrideHandled &&
+      (!calibrationOverridePrompt || !calibrationOverridePrompt.ready)
+    ) {
+      setCalibrationOverridePrompt({
+        sessionId: calibrationSessionId,
+        line: promptLine,
+        ready: true,
+      });
+      setCalibrationStarted(false);
+    }
+  }, [calibrationSessionId, calibrationLogs, calibrationOverrideHandled, calibrationOverridePrompt]);
+
+  useEffect(() => {
     if (!calibrationSessionId) return;
     if (!calibrationStarted || calibrationReady) return;
     if (calibrationRunning) return;
@@ -423,6 +418,10 @@ export default function Home() {
   ];
 
   const sendEnterToCalibration = async () => {
+    if (calibrationOverridePrompt) {
+      setMessage("Resolve the override prompt first.");
+      return;
+    }
     if (!calibrationSessionId) {
       setError("No calibration session is active.");
       return;
@@ -433,6 +432,43 @@ export default function Home() {
       setMessage("Calibration started. Move each joint, then hit End calibration to finish.");
     } catch (err) {
       setError(toMessage(err));
+    }
+  };
+
+  const continueCalibrationOverride = async () => {
+    if (!calibrationSessionId) return;
+    if (!calibrationOverridePrompt?.ready) {
+      setMessage("Waiting for calibration prompt before continuing...");
+      return;
+    }
+    try {
+      await sendCalibrationInput(calibrationSessionId, "c");
+      setCalibrationOverridePrompt(null);
+      setCalibrationOverrideHandled(true);
+      setCalibrationStarted(false);
+      setMessage("Override confirmed. Now press Start to begin calibration sweep.");
+    } catch (err) {
+      setError(toMessage(err));
+    }
+  };
+
+  const cancelCalibrationOverride = async () => {
+    if (!calibrationSessionId) {
+      setCalibrationOverridePrompt(null);
+      setCalibrationOverrideHandled(true);
+      return;
+    }
+    try {
+      await sendCalibrationEnter(calibrationSessionId);
+      setMessage("Keeping existing calibration file.");
+    } catch (err) {
+      setError(toMessage(err));
+    } finally {
+      setCalibrationOverridePrompt(null);
+      setCalibrationOverrideHandled(true);
+      cleanupCalibrationSession();
+      setCalibrationTarget(null);
+      setCalibrationReady(false);
     }
   };
 
@@ -860,12 +896,12 @@ export default function Home() {
                   {calibrationSessionId ? (calibrationRunning ? "running" : "waiting") : "idle"}
                 </span>
               </div>
-              <p className="muted" style={{ marginTop: 6 }}>
-                {calibrationSessionId
-                  ? "Prompts mirrored from the backend. Use Start calibration for the first ENTER and End calibration once you're done sweeping joints."
-                  : "No calibration process is active. Launch calibration to see live prompts here."}
-              </p>
-              <div
+            <p className="muted" style={{ marginTop: 6 }}>
+              {calibrationSessionId
+                ? "Prompts mirrored from the backend. Use Start calibration for the first ENTER and End calibration once you're done sweeping joints."
+                : "No calibration process is active. Launch calibration to see live prompts here."}
+            </p>
+            <div
                 style={{
                   background: "rgba(0, 0, 0, 0.08)",
                   border: "1px solid var(--border)",
@@ -965,7 +1001,7 @@ export default function Home() {
                   <button
                     className="btn btn-primary"
                     onClick={calibrationStarted ? stopCalibrationSweep : sendEnterToCalibration}
-                    disabled={!calibrationSessionId || calibrationFailed}
+                    disabled={!calibrationSessionId || calibrationFailed || Boolean(calibrationOverridePrompt)}
                   >
                     {calibrationStarted ? "End calibration" : "Start calibration"}
                   </button>
@@ -978,7 +1014,6 @@ export default function Home() {
                     ? "End sends a second ENTER to stop the sweep and capture ranges."
                     : "Start sends the first ENTER. Move every joint, then hit End to stop the sweep."}
                 </p>
-                {calibrationTarget.has_calibration && <span className="muted">Override enabled.</span>}
                 {!calibrationRunning && !calibrationReady && (
                   <span className="muted">Calibration process not running.</span>
                 )}
@@ -1013,6 +1048,40 @@ export default function Home() {
                 </div>
               </div>
             )}
+          </div>
+        </div>
+      )}
+
+      {calibrationOverridePrompt && (
+        <div className="modal">
+          <div className="panel" style={{ maxWidth: 520, width: "100%" }}>
+            <div className="row">
+              <h3>Existing calibration detected</h3>
+              <div className="spacer" />
+              <button className="btn btn-ghost" onClick={cancelCalibrationOverride}>
+                Cancel
+              </button>
+            </div>
+            <p className="notice" style={{ marginTop: 6 }}>
+              {calibrationTarget?.name || "This robot"} already has a calibration file. Continue to
+              override it (send <code>c</code> + ENTER) or cancel to keep the existing file (send ENTER).
+            </p>
+            <p className="muted" style={{ marginTop: 8 }}>
+              Prompt: {calibrationOverridePrompt.ready ? calibrationOverridePrompt.line : "Waiting for prompt..."}
+            </p>
+            <div className="divider" />
+            <div className="row" style={{ gap: 8 }}>
+              <button
+                className="btn btn-primary"
+                onClick={continueCalibrationOverride}
+                disabled={!calibrationOverridePrompt.ready}
+              >
+                Continue calibration
+              </button>
+              <button className="btn" onClick={cancelCalibrationOverride}>
+                Cancel calibration
+              </button>
+            </div>
           </div>
         </div>
       )}

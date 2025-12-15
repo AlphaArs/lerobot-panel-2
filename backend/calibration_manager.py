@@ -43,15 +43,19 @@ class CalibrationManager:
         self._sessions: dict[str, CalibrationSessionState] = {}
         self._lock = Lock()
 
-    def _write_stdin_newline(self, state: CalibrationSessionState) -> bool:
+    def _write_stdin(self, state: CalibrationSessionState, data: str) -> bool:
+        payload = data if data.endswith("\n") else f"{data}\n"
         try:
             if state.process and state.process.stdin:
-                state.process.stdin.write("\n")
+                state.process.stdin.write(payload)
                 state.process.stdin.flush()
                 return True
         except Exception:
             return False
         return False
+
+    def _write_stdin_newline(self, state: CalibrationSessionState) -> bool:
+        return self._write_stdin(state, "")
 
     def _touch_flag(self, state: CalibrationSessionState) -> bool:
         flag = state.enter_flag
@@ -125,8 +129,16 @@ class CalibrationManager:
             if chunk == "\n":
                 self._handle_line(buf, state)
                 buf = ""
-            else:
-                buf += chunk
+                continue
+            buf += chunk
+            # Some prompts (like input()) don't end with a newline. Detect and flush them once we see the full prompt (ends with ':').
+            lowered = buf.lower()
+            if (
+                "press enter to use provided calibration file associated with the id" in lowered
+                and buf.strip().endswith(":")
+            ):
+                self._handle_line(buf, state)
+                buf = ""
         if buf:
             self._handle_line(buf, state)
         if state.process.stdout:
@@ -193,6 +205,23 @@ class CalibrationManager:
         if stdin_ok:
             return True, "ENTER sent."
         return False, "Failed to send ENTER (stdin unavailable)."
+
+    def send_input(self, session_id: str, data: str) -> tuple[bool, str]:
+        state = self.get(session_id)
+        if not state:
+            return False, "Session not found."
+        if state.dry_run:
+            return False, "Dry-run session does not accept input."
+        if not state.process or state.process.poll() is not None:
+            state.running = False
+            return False, "Calibration process is not running."
+
+        stdin_ok = self._write_stdin(state, data or "")
+        pretty = (data or "ENTER").replace("\n", "\\n")
+        state.logs.append(f"[panel] input {pretty} (stdin={stdin_ok})")
+        if stdin_ok:
+            return True, "Input sent."
+        return False, "Failed to send input (stdin unavailable)."
 
     def send_stop(self, session_id: str) -> tuple[bool, str]:
         state = self.get(session_id)
