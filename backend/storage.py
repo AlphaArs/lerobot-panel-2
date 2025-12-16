@@ -6,6 +6,7 @@ import uuid
 from datetime import datetime
 import os
 from pathlib import Path
+import shutil
 from typing import Dict, List, Optional
 
 from .models import Robot, RobotCreate, SUPPORTED_MODELS
@@ -99,14 +100,23 @@ class RobotStore:
         return self._to_robot(record)
 
     def delete(self, robot_id: str) -> bool:
+        removed: Dict | None = None
+        deleted = False
         with self._lock:
             robots = self._data.get("robots", [])
-            new_list = [item for item in robots if item.get("id") != robot_id]
+            new_list = []
+            for item in robots:
+                if item.get("id") == robot_id:
+                    removed = item.copy()
+                    continue
+                new_list.append(item)
             deleted = len(new_list) != len(robots)
             if deleted:
                 self._data["robots"] = new_list
                 self._save()
-            return deleted
+        if removed:
+            self._remove_calibration_file(removed)
+        return deleted
 
     def set_calibration(self, robot_id: str, calibration) -> Optional[Robot]:
         with self._lock:
@@ -118,12 +128,16 @@ class RobotStore:
         return None
 
     def clear_calibration(self, robot_id: str) -> Optional[Robot]:
+        target: Dict | None = None
         with self._lock:
             for item in self._data.get("robots", []):
                 if item.get("id") == robot_id:
-                    # No calibration data persisted to robots.json
+                    target = item.copy()
                     self._save()
-                    return self._to_robot(item)
+                    break
+        if target:
+            self._remove_calibration_file(target)
+            return self._to_robot(target)
         return None
 
     def mark_seen(self, robot_id: str, at: datetime) -> None:
@@ -146,3 +160,64 @@ class RobotStore:
             calibration=None,
             last_seen=_parse_datetime(data.get("last_seen")),
         )
+
+    def update(self, robot_id: str, changes: Dict[str, str]) -> Optional[Robot]:
+        prior: Dict | None = None
+        updated_snapshot: Dict | None = None
+        with self._lock:
+            for item in self._data.get("robots", []):
+                if item.get("id") == robot_id:
+                    prior = item.copy()
+                    for key, value in changes.items():
+                        if value is None:
+                            continue
+                        item[key] = value
+                    updated_snapshot = item.copy()
+                    self._save()
+                    break
+        if prior and updated_snapshot:
+            self._maybe_rename_calibration(prior, updated_snapshot)
+            return self._to_robot(updated_snapshot)
+        return None
+
+    def _remove_calibration_file(self, data: Dict) -> bool:
+        path = _calibration_path(data)
+        try:
+            if path.is_file():
+                path.unlink()
+                self._cleanup_empty_dirs(path.parent)
+                return True
+        except OSError:
+            return False
+        return False
+
+    def _maybe_rename_calibration(self, before: Dict, after: Dict) -> bool:
+        old_path = _calibration_path(before)
+        new_path = _calibration_path(after)
+        if old_path == new_path:
+            return False
+        if not old_path.exists():
+            return False
+        try:
+            new_path.parent.mkdir(parents=True, exist_ok=True)
+            if new_path.exists():
+                new_path.unlink()
+            shutil.move(str(old_path), str(new_path))
+            self._cleanup_empty_dirs(old_path.parent)
+            return True
+        except OSError:
+            return False
+
+    def _cleanup_empty_dirs(self, start: Path) -> None:
+        """
+        Walk up from start and remove empty calibration folders to avoid clutter.
+        """
+        current = start
+        try:
+            while current != CALIB_ROOT.parent and current.exists():
+                if any(current.iterdir()):
+                    break
+                current.rmdir()
+                current = current.parent
+        except OSError:
+            pass

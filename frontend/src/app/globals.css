@@ -246,6 +246,38 @@ td input {
   transform: translateX(-50%);
 }
 
+.list-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: rgba(255, 255, 255, 0.02);
+  cursor: pointer;
+  transition: border-color 0.15s ease, transform 0.15s ease, background 0.15s ease;
+}
+
+.list-row:hover {
+  border-color: rgba(127, 232, 195, 0.35);
+  background: rgba(127, 232, 195, 0.06);
+  transform: translateY(-1px);
+}
+
+.list-row input[type="checkbox"] {
+  width: auto;
+}
+
+.robot-placeholder {
+  width: 100%;
+  max-width: 360px;
+  margin: 0 auto 12px;
+  padding: 20px;
+  border-radius: 16px;
+  border: 1px dashed var(--border);
+  background: rgba(255, 255, 255, 0.03);
+}
+
 @media (max-width: 768px) {
   .page {
     padding: 16px;

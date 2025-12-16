@@ -1,8 +1,35 @@
-10 seconds delay after the calibration page is open
 
 
-Instead of having a terminal opened when we start calibration page, maybe contantly have a terminal or socket open, where all executed commands are sent to. so I open the app in the background this is ready, the command is sent when I open the calibration page. and if I cancel or leave the page it just CTRL + C or just cancels the action. 
-and later when we have other action and stuff it sends the different commands in the same terminal. but yeah this means we never should or could send or do different actions at the same moment.
-
+---
 
 throw different error when you detect (min max are at their max values) since this means the mid possition was not set.
+
+
+----
+
+I like this project, I would like to change a few things. 
+
+on the home page. I woule like to have the robot list where I can bulk select, to delete for example, and  to just show the list of robots with their name, and type state (online/ofline). but no releoperate section or buttons to calibrate, inspect and delete.
+
+all of these expect inspect that should be removed,  should be moved on the specific page of the robot. so when you press on the item of the list it opens it's specific page. there you have a nice overview of the bot, a section for commands, calibration, delete and teleoperation, edit name, and stuff like that.
+
+if I rename it should change also the name in the lerobot .cache folder (so the actual calibration file) 
+
+and when I delete the bot it should also delete it's calibration.
+
+so show a modal dialog asking are you sure when clicking delete, and give an option to cancel and delete. 
+
+---
+
+also on the calibration page, can you rework the header, like there are a lot of things wrong there, like back button should be an arrow back and some stuff looks weird.
+
+also make it so that when we open the calibration page, have the loading because we wait for the output telling us the script is ready. but instead of showing us the calibration page we first show the first step in full page where we see centred an image (set a place holder if possible of a robot) with underneed a text telling the user, put the robot in this position. 
+with a  button saying Next with an arrow pointing to the right.
+
+when we press it we arrive on the normal calibration page but with the calibration started, (so we don't click on the start calibration button, but directly see end calibration, to finish since hte process is started.) 
+
+
+Also make the process output a button that you can click somewere that looks like an icon of a console, 
+that can enable and disable the view of this secton, do make it fade in and out when enabled and disabled, remove the section as a whole and default as desabled since we try to have a clean intergace.
+
+

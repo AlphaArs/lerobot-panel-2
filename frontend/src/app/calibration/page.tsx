@@ -51,6 +51,9 @@ export default function CalibrationPage() {
   const [calibrationSaving, setCalibrationSaving] = useState(false);
   const [calibrationWaitingForOutput, setCalibrationWaitingForOutput] = useState(false);
   const [completionOverlay, setCompletionOverlay] = useState(false);
+  const [introVisible, setIntroVisible] = useState(true);
+  const [showConsole, setShowConsole] = useState(false);
+  const [consoleMounted, setConsoleMounted] = useState(false);
   const [calibrationReturnCode, setCalibrationReturnCode] = useState<number | null>(null);
   const [calibrationOverridePrompt, setCalibrationOverridePrompt] = useState<{
     sessionId: string;
@@ -150,6 +153,9 @@ export default function CalibrationPage() {
     setCalibrationSaving(false);
     setCalibrationWaitingForOutput(false);
     setCompletionOverlay(false);
+    setIntroVisible(false);
+    setShowConsole(false);
+    setConsoleMounted(false);
   };
 
   const handleCalibrate = async () => {
@@ -165,6 +171,8 @@ export default function CalibrationPage() {
       }
     }
     cleanupCalibrationSession();
+    setIntroVisible(true);
+    setShowConsole(false);
     setCalibrationStarting(true);
     setCalibrationWaitingForOutput(true);
     setCalibrationReady(false);
@@ -328,6 +336,12 @@ export default function CalibrationPage() {
   }, [calibrationSessionId, calibrationLogs, calibrationOverrideHandled, calibrationOverridePrompt]);
 
   useEffect(() => {
+    if (calibrationOverridePrompt) {
+      setIntroVisible(false);
+    }
+  }, [calibrationOverridePrompt]);
+
+  useEffect(() => {
     if (!calibrationWaitingForOutput) return;
     const placeholderTokens = [
       "requesting calibration session",
@@ -342,6 +356,15 @@ export default function CalibrationPage() {
       setCalibrationWaitingForOutput(false);
     }
   }, [calibrationLogs, calibrationWaitingForOutput]);
+
+  useEffect(() => {
+    if (showConsole) {
+      setConsoleMounted(true);
+      return;
+    }
+    const timer = setTimeout(() => setConsoleMounted(false), 180);
+    return () => clearTimeout(timer);
+  }, [showConsole]);
 
   useEffect(() => {
     if (!calibrationSessionId) return;
@@ -393,26 +416,59 @@ export default function CalibrationPage() {
     }
   }, [calibrationFailed, displayedCalibrationLogs, calibrationRanges]);
 
+  const saveCalibrationFlow = useCallback(async () => {
+    if (!calibrationTarget) return;
+    if (completionOverlay) return;
+    const payload: Calibration = { joints: calibrationJoints };
+    setLoading(true);
+    try {
+      const updated = await saveCalibration(calibrationTarget.id, payload);
+      setRobots((list) => list.map((r) => (r.id === updated.id ? updated : r)));
+      cleanupCalibrationSession();
+      setCalibrationTarget(updated);
+      setCalibrationReady(false);
+      setMessage("Calibration saved.");
+      setCompletionOverlay(true);
+      setTimeout(() => {
+        router.push("/");
+      }, 5000);
+    } catch (err) {
+      setError(toMessage(err));
+    } finally {
+      setLoading(false);
+      setCalibrationSaving(false);
+    }
+  }, [calibrationTarget, calibrationJoints, completionOverlay, router]);
+
   useEffect(() => {
     if (calibrationReady && calibrationSaving && calibrationTarget && !completionOverlay && !calibrationFailed) {
       void saveCalibrationFlow();
     }
-  }, [calibrationReady, calibrationSaving, calibrationTarget, completionOverlay, calibrationFailed]);
+  }, [calibrationReady, calibrationSaving, calibrationTarget, completionOverlay, calibrationFailed, saveCalibrationFlow]);
   const sendEnterToCalibration = async () => {
     if (calibrationOverridePrompt) {
       setMessage("Resolve the override prompt first.");
-      return;
+      return false;
     }
     if (!calibrationSessionId) {
       setError("No calibration session is active.");
-      return;
+      return false;
     }
     try {
       await sendCalibrationEnter(calibrationSessionId);
       setCalibrationStarted(true);
       setMessage("Calibration started. Move each joint, then hit End calibration to finish.");
+      return true;
     } catch (err) {
       setError(toMessage(err));
+    }
+    return false;
+  };
+
+  const startSweepFromIntro = async () => {
+    const ok = await sendEnterToCalibration();
+    if (ok) {
+      setIntroVisible(false);
     }
   };
 
@@ -465,7 +521,7 @@ export default function CalibrationPage() {
     try {
       await stopCalibration(calibrationSessionId);
       setMessage("Stop ENTER sent. Waiting for calibration to finish...");
-    } catch (err) {
+    } catch {
       try {
         await sendCalibrationEnter(calibrationSessionId);
         setMessage("Stop request retried via ENTER. Waiting for calibration to finish...");
@@ -497,35 +553,13 @@ export default function CalibrationPage() {
     }
   };
 
-  const saveCalibrationFlow = async () => {
-    if (!calibrationTarget) return;
-    if (completionOverlay) return;
-    const payload: Calibration = { joints: calibrationJoints };
-    setLoading(true);
-    try {
-      const updated = await saveCalibration(calibrationTarget.id, payload);
-      setRobots((list) => list.map((r) => (r.id === updated.id ? updated : r)));
-      cleanupCalibrationSession();
-      setCalibrationTarget(updated);
-      setCalibrationReady(false);
-      setMessage("Calibration saved.");
-      setCompletionOverlay(true);
-      setTimeout(() => {
-        router.push("/");
-      }, 5000);
-    } catch (err) {
-      setError(toMessage(err));
-    } finally {
-      setLoading(false);
-      setCalibrationSaving(false);
-    }
-  };
 
   const calibrationSteps = [
     { title: "Set neutral pose", detail: "Place the arm in its neutral position before starting.", index: 1 },
     { title: "Sweep joints", detail: "Move each joint through its range and record min/current/max.", index: 2 },
     { title: "Save calibration", detail: "Confirm values and save to store the calibration.", index: 3 },
   ];
+
 
   const activeRobotName = calibrationTarget?.name || "Select a robot";
 
@@ -534,6 +568,8 @@ export default function CalibrationPage() {
       setAutoStarted(true);
       void handleCalibrate();
     }
+    // We intentionally only react to the initial target to avoid restarting calibration mid-session.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [calibrationTarget, autoStarted]);
   return (
     <>
@@ -541,14 +577,29 @@ export default function CalibrationPage() {
         <header className="panel" style={{ marginBottom: 16 }}>
           <div className="row" style={{ alignItems: "center", gap: 12 }}>
             <button className="btn" onClick={() => router.push("/")}>
-              Back
+              {"< Back"}
             </button>
             <div className="stack" style={{ flex: 1 }}>
               <p className="tag">Calibration</p>
               <h1 style={{ margin: "4px 0 2px" }}>Calibrate your robot</h1>
               <p className="muted" style={{ margin: 0 }}>
-                Pick a robot, kick off calibration, and watch logs in real time.
+                We launch the calibration session right away. Line up the arm during the intro step, then
+                end the sweep once you have moved every joint.
               </p>
+            </div>
+            <div className="row" style={{ gap: 8, flexWrap: "wrap" }}>
+              <button
+                className={`btn ${showConsole ? "btn-primary" : ""}`}
+                onClick={() => setShowConsole((v) => !v)}
+                title="Toggle process output"
+              >
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                  <path d="M4 6h16v12H4z" />
+                  <path d="M8 10l3 2-3 2" />
+                  <path d="M12 14h4" />
+                </svg>
+                <span>{showConsole ? "Hide output" : "Show output"}</span>
+              </button>
             </div>
             <div className="stack" style={{ alignItems: "flex-end" }}>
               {error && <span className="error">{error}</span>}
@@ -628,50 +679,61 @@ export default function CalibrationPage() {
               </div>
             </div>
 
-            <div className="panel" style={{ padding: 12 }}>
-              <div className="row">
-                <strong>Process output</strong>
-                <div className="spacer" />
-                <span className="tag">
-                  {calibrationSessionId ? (calibrationRunning ? "running" : "waiting") : "idle"}
-                </span>
-              </div>
-              <p className="muted" style={{ marginTop: 6 }}>
-                {calibrationSessionId
-                  ? "Prompts mirrored from the backend. Use Start calibration for the first ENTER and End calibration once you're done sweeping joints."
-                  : "No calibration process is active. Launch calibration to see live prompts here."}
-              </p>
+            {consoleMounted && (
               <div
+                className="panel"
                 style={{
-                  background: "rgba(0, 0, 0, 0.08)",
-                  border: "1px solid var(--border)",
-                  borderRadius: 8,
-                  padding: 10,
-                  maxHeight: 180,
-                  overflowY: "auto",
-                  fontFamily: "SFMono-Regular, Consolas, Menlo, monospace",
-                  fontSize: 13,
-                  marginTop: 6,
+                  padding: 12,
+                  opacity: showConsole ? 1 : 0,
+                  transform: showConsole ? "translateY(0)" : "translateY(-6px)",
+                  pointerEvents: showConsole ? "auto" : "none",
+                  transition: "opacity 0.2s ease, transform 0.2s ease",
                 }}
               >
-                {!calibrationSessionId ? (
-                  <span className="muted">No session yet.</span>
-                ) : displayedCalibrationLogs.length === 0 ? (
-                  <span className="muted">Waiting for logs...</span>
-                ) : (
-                  displayedCalibrationLogs.map((line, idx) => <div key={`${idx}-${line}`}>{line}</div>)
+                <div className="row">
+                  <strong>Process output</strong>
+                  <div className="spacer" />
+                  <span className="tag">
+                    {calibrationSessionId ? (calibrationRunning ? "running" : "waiting") : "idle"}
+                  </span>
+                </div>
+                <p className="muted" style={{ marginTop: 6 }}>
+                  {calibrationSessionId
+                    ? "Mirrors the calibration script output. Hidden by default to keep the interface clean."
+                    : "No calibration process is active. Launch calibration to see live prompts here."}
+                </p>
+                <div
+                  style={{
+                    background: "rgba(0, 0, 0, 0.08)",
+                    border: "1px solid var(--border)",
+                    borderRadius: 8,
+                    padding: 10,
+                    maxHeight: 180,
+                    overflowY: "auto",
+                    fontFamily: "SFMono-Regular, Consolas, Menlo, monospace",
+                    fontSize: 13,
+                    marginTop: 6,
+                  }}
+                >
+                  {!calibrationSessionId ? (
+                    <span className="muted">No session yet.</span>
+                  ) : displayedCalibrationLogs.length === 0 ? (
+                    <span className="muted">Waiting for logs...</span>
+                  ) : (
+                    displayedCalibrationLogs.map((line, idx) => <div key={`${idx}-${line}`}>{line}</div>)
+                  )}
+                </div>
+                {calibrationFailed && (
+                  <div className="notice" style={{ marginTop: 8 }}>
+                    Calibration failed. {(() => {
+                      const stuck = extractUnmovedJoints(displayedCalibrationLogs);
+                      if (stuck.length === 0) return "One or more joints did not move.";
+                      return `These joints did not move: ${stuck.join(", ")}.`;
+                    })()} Move them through their range and restart.
+                  </div>
                 )}
               </div>
-              {calibrationFailed && (
-                <div className="notice" style={{ marginTop: 8 }}>
-                  Calibration failed. {(() => {
-                    const stuck = extractUnmovedJoints(displayedCalibrationLogs);
-                    if (stuck.length === 0) return "One or more joints did not move.";
-                    return `These joints did not move: ${stuck.join(", ")}.`;
-                  })()} Move them through their range and restart.
-                </div>
-              )}
-            </div>
+            )}
 
             <div className="panel" style={{ padding: 12 }}>
               <div className="row">
@@ -743,7 +805,8 @@ export default function CalibrationPage() {
                       !calibrationSessionId ||
                       calibrationFailed ||
                       Boolean(calibrationOverridePrompt) ||
-                      calibrationSaving
+                      calibrationSaving ||
+                      (introVisible && !calibrationStarted)
                     }
                   >
                     {calibrationSaving ? (
@@ -763,7 +826,7 @@ export default function CalibrationPage() {
                     ) : calibrationStarted ? (
                       "End calibration"
                     ) : (
-                      "Start calibration"
+                      "Start sweep"
                     )}
                   </button>
                   <button className="btn btn-ghost" onClick={cancelCalibrationFlow}>
@@ -773,10 +836,15 @@ export default function CalibrationPage() {
                 <p className="muted">
                   {calibrationStarted
                     ? "End sends a second ENTER to stop the sweep and capture ranges."
-                    : "Start sends the first ENTER. Move every joint, then hit End to stop the sweep."}
+                    : "Press Next on the intro screen to send the first ENTER and begin sweeping joints."}
                 </p>
+                {introVisible && !calibrationStarted && (
+                  <span className="muted">Complete the intro step to start the sweep.</span>
+                )}
                 {!calibrationRunning && !calibrationReady && (
-                  <span className="muted">Calibration process not running.</span>
+                  <span className="muted">
+                    {calibrationStarted ? "Waiting for live data..." : "Calibration process not running."}
+                  </span>
                 )}
                 {calibrationFailed && (
                   <div className="row" style={{ gap: 8, flexWrap: "wrap" }}>
@@ -873,19 +941,91 @@ export default function CalibrationPage() {
         )}
       </main>
 
+      {introVisible && calibrationTarget && (
+        <div
+          style={{
+            position: "fixed",
+            inset: 0,
+            background: "rgba(5, 10, 20, 0.9)",
+            backdropFilter: "blur(10px)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            padding: 20,
+            zIndex: 60,
+          }}
+        >
+          <div className="panel" style={{ maxWidth: 640, width: "100%", textAlign: "center" }}>
+            <p className="tag" style={{ display: "inline-flex", marginBottom: 8 }}>
+              Step 1 - Position the arm
+            </p>
+            <div className="robot-placeholder">
+              <svg width="220" height="140" viewBox="0 0 220 140" fill="none" stroke="currentColor" strokeWidth="2">
+                <rect x="30" y="90" width="160" height="24" rx="8" fill="rgba(127, 232, 195, 0.08)" />
+                <circle cx="62" cy="82" r="12" fill="rgba(127, 232, 195, 0.2)" />
+                <circle cx="158" cy="82" r="12" fill="rgba(127, 232, 195, 0.2)" />
+                <path d="M110 50 L150 70 L158 82" stroke="currentColor" />
+                <path d="M110 50 L70 70 L62 82" stroke="currentColor" />
+                <circle cx="110" cy="50" r="14" fill="rgba(127, 232, 195, 0.16)" />
+                <rect x="96" y="28" width="28" height="10" rx="5" fill="rgba(255, 179, 107, 0.35)" stroke="none" />
+              </svg>
+            </div>
+            <h2 style={{ margin: "10px 0 6px" }}>Put the robot in neutral</h2>
+            <p className="muted" style={{ margin: 0 }}>
+              Center the joints and keep the gripper relaxed. We will start the sweep as soon as the
+              calibration script is ready.
+            </p>
+            <div className="row" style={{ justifyContent: "center", gap: 10, marginTop: 14 }}>
+              <button className="btn btn-ghost" onClick={cancelCalibrationFlow}>
+                Cancel
+              </button>
+              <button
+                className="btn btn-primary"
+                onClick={startSweepFromIntro}
+                disabled={calibrationWaitingForOutput || !calibrationSessionId}
+              >
+                {calibrationWaitingForOutput ? (
+                  <span style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
+                    <span
+                      style={{
+                        width: 16,
+                        height: 16,
+                        borderRadius: "50%",
+                        border: "2px solid rgba(255,255,255,0.3)",
+                        borderTopColor: "white",
+                        animation: "spin 0.8s linear infinite",
+                      }}
+                    />
+                    Waiting for output...
+                  </span>
+                ) : (
+                  <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+                    Next
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                      <path d="M5 12h14" />
+                      <path d="M13 6l6 6-6 6" />
+                    </svg>
+                  </span>
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       <div
         style={{
           position: "fixed",
           inset: 0,
-            background: "rgba(0, 0, 0, 0.6)",
-            backdropFilter: "blur(8px)",
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            flexDirection: "column",
-            zIndex: 30,
-          opacity: calibrationWaitingForOutput ? 1 : 0,
-          pointerEvents: calibrationWaitingForOutput ? "auto" : "none",
+          background: "rgba(0, 0, 0, 0.6)",
+          backdropFilter: "blur(8px)",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          flexDirection: "column",
+          zIndex: 30,
+          opacity: calibrationWaitingForOutput && !introVisible ? 1 : 0,
+          pointerEvents: calibrationWaitingForOutput && !introVisible ? "auto" : "none",
           transition: calibrationWaitingForOutput ? "none" : "opacity 0.2s ease",
         }}
       >

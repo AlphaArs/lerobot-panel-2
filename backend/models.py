@@ -45,6 +45,11 @@ class RobotCreate(RobotBase):
     pass
 
 
+class RobotUpdate(BaseModel):
+    name: Optional[str] = None
+    com_port: Optional[str] = None
+
+
 class Robot(RobotBase):
     id: str
     status: str = Field(default="offline", description="online if COM is present")

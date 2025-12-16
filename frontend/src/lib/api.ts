@@ -33,6 +33,7 @@ export type Robot = {
   status: "online" | "offline";
   has_calibration: boolean;
   calibration?: Calibration | null;
+  last_seen?: string | null;
 };
 
 export const API_BASE = process.env.NEXT_PUBLIC_API_BASE || "http://localhost:8000";
@@ -91,6 +92,20 @@ export function deleteRobot(id: string): Promise<void> {
   return request(`/robots/${id}`, { method: "DELETE" });
 }
 
+export function updateRobot(
+  id: string,
+  payload: Partial<{ name: string; com_port: string }>
+): Promise<Robot> {
+  return request<Robot>(`/robots/${id}`, {
+    method: "PATCH",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function fetchRobot(id: string): Promise<Robot> {
+  return request<Robot>(`/robots/${id}`);
+}
+
 export function startCalibration(id: string, override = false): Promise<CalibrationSession> {
   return request<CalibrationSession>(`/robots/${id}/calibration/start`, {
     method: "POST",
@@ -102,6 +117,12 @@ export function saveCalibration(id: string, calibration: Calibration): Promise<R
   return request<Robot>(`/robots/${id}/calibration`, {
     method: "POST",
     body: JSON.stringify(calibration),
+  });
+}
+
+export function deleteCalibration(id: string): Promise<Robot> {
+  return request<Robot>(`/robots/${id}/calibration`, {
+    method: "DELETE",
   });
 }
 

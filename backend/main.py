@@ -20,6 +20,7 @@ from .models import (
     CalibrationInput,
     Robot,
     RobotCreate,
+    RobotUpdate,
     SUPPORTED_MODELS,
     TeleopRequest,
 )
@@ -103,6 +104,35 @@ def create_robot(payload: RobotCreate) -> Robot:
         raise HTTPException(status_code=400, detail="A robot with that name already exists.")
     robot = store.add(payload)
     return _with_status(robot)
+
+
+@app.patch("/robots/{robot_id}", response_model=Robot)
+def update_robot(robot_id: str, payload: RobotUpdate) -> Robot:
+    robot = _require_robot(robot_id)
+    updates = payload.model_dump(exclude_unset=True)
+
+    if "name" in updates:
+        new_name = (updates["name"] or "").strip()
+        if not new_name:
+            raise HTTPException(status_code=400, detail="Name cannot be empty.")
+        existing = {r.name.lower() for r in store.list() if r.id != robot_id}
+        if new_name.lower() in existing:
+            raise HTTPException(status_code=400, detail="A robot with that name already exists.")
+        updates["name"] = new_name
+
+    if "com_port" in updates:
+        new_port = (updates["com_port"] or "").strip()
+        if not new_port:
+            raise HTTPException(status_code=400, detail="COM port cannot be empty.")
+        updates["com_port"] = new_port
+
+    if not updates:
+        return _with_status(robot)
+
+    updated = store.update(robot_id, updates)
+    if not updated:
+        raise HTTPException(status_code=404, detail="Robot not found")
+    return _with_status(updated)
 
 
 @app.get("/robots/{robot_id}", response_model=Robot)
@@ -204,6 +234,13 @@ def save_calibration(robot_id: str, calibration: Calibration) -> Robot:
 def get_calibration(robot_id: str) -> Calibration | None:
     robot = _require_robot(robot_id)
     return robot.calibration
+
+
+@app.delete("/robots/{robot_id}/calibration", response_model=Robot)
+def delete_calibration(robot_id: str) -> Robot:
+    robot = _require_robot(robot_id)
+    updated = store.clear_calibration(robot.id)
+    return _with_status(updated or robot)
 
 
 @app.post("/teleop/start")
