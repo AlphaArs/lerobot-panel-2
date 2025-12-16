@@ -164,3 +164,10 @@ export function startTeleop(leaderId: string, followerId: string) {
     body: JSON.stringify({ leader_id: leaderId, follower_id: followerId }),
   });
 }
+
+export function stopTeleop(leaderId: string, followerId: string) {
+  return request<{ message: string }>("/teleop/stop", {
+    method: "POST",
+    body: JSON.stringify({ leader_id: leaderId, follower_id: followerId }),
+  });
+}

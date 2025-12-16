@@ -9,13 +9,10 @@ import {
   fetchRobot,
   fetchRobots,
   robotsWsUrl,
-  startTeleop,
   updateRobot,
 } from "@/lib/api";
 
 const toMessage = (err: unknown) => (err instanceof Error ? err.message : "Request failed");
-
-type TeleopState = { leaderId: string; followerId: string } | null;
 
 export default function RobotDetailPage() {
   const params = useParams();
@@ -30,9 +27,10 @@ export default function RobotDetailPage() {
   const [nameInput, setNameInput] = useState("");
   const [savingName, setSavingName] = useState(false);
   const [selectedFollower, setSelectedFollower] = useState("");
-  const [activeTeleop, setActiveTeleop] = useState<TeleopState>(null);
   const [showDeleteModal, setShowDeleteModal] = useState(false);
   const [showDeleteCalibrationModal, setShowDeleteCalibrationModal] = useState(false);
+  const [showRenameModal, setShowRenameModal] = useState(false);
+  const [showTeleopModal, setShowTeleopModal] = useState(false);
 
   const loadData = useCallback(async () => {
     if (!robotId) return;
@@ -119,6 +117,7 @@ export default function RobotDetailPage() {
     const trimmed = nameInput.trim();
     if (!trimmed || trimmed === robot.name) {
       setNameInput(robot.name);
+      setShowRenameModal(false);
       return;
     }
     setSavingName(true);
@@ -132,6 +131,7 @@ export default function RobotDetailPage() {
       setError(toMessage(err));
     } finally {
       setSavingName(false);
+      setShowRenameModal(false);
     }
   };
 
@@ -149,43 +149,6 @@ export default function RobotDetailPage() {
       setLoading(false);
       setShowDeleteModal(false);
     }
-  };
-
-  const startTeleopFlow = async () => {
-    if (!robot) return;
-    if (robot.role !== "leader") {
-      setError("Teleoperation can only be started from a leader arm.");
-      return;
-    }
-    if (!selectedFollower) {
-      setError("Pick a follower to teleoperate.");
-      return;
-    }
-    const follower = followerOptions.find((r) => r.id === selectedFollower);
-    if (!follower) {
-      setError("Follower not found.");
-      return;
-    }
-    if (!follower.has_calibration) {
-      setError("Follower needs a calibration before teleoperation.");
-      return;
-    }
-    if (!robot.has_calibration) {
-      setError("Leader needs a calibration before teleoperation.");
-      return;
-    }
-    try {
-      const res = await startTeleop(robot.id, follower.id);
-      setActiveTeleop({ leaderId: robot.id, followerId: follower.id });
-      setMessage(res.message);
-    } catch (err) {
-      setError(toMessage(err));
-    }
-  };
-
-  const stopTeleop = () => {
-    setActiveTeleop(null);
-    setMessage("Teleoperation stopped.");
   };
 
   const handleDeleteCalibration = async () => {
@@ -211,6 +174,37 @@ export default function RobotDetailPage() {
     </span>
   ) : null;
 
+  const openTeleopFlow = () => {
+    if (!robot) return;
+    if (robot.role !== "leader") {
+      setError("Teleoperation can only be started from a leader arm.");
+      return;
+    }
+    setShowTeleopModal(true);
+  };
+
+  const startTeleopNavigation = () => {
+    if (!robot) return;
+    if (!selectedFollower) {
+      setError("Pick a follower to teleoperate.");
+      return;
+    }
+    const follower = followerOptions.find((f) => f.id === selectedFollower);
+    if (!follower) {
+      setError("Follower not found.");
+      return;
+    }
+    if (!follower.has_calibration) {
+      setError("Follower needs a calibration before teleoperation.");
+      return;
+    }
+    if (!robot.has_calibration) {
+      setError("Leader needs a calibration before teleoperation.");
+      return;
+    }
+    router.push(`/teleop?leader=${robot.id}&follower=${selectedFollower}`);
+  };
+
   return (
     <>
       <main className="page">
@@ -223,7 +217,7 @@ export default function RobotDetailPage() {
               <p className="tag">Robot overview</p>
               <h1 style={{ margin: "4px 0" }}>{robot?.name || "Loading..."}</h1>
               <p className="muted" style={{ margin: 0 }}>
-                Manage commands, calibration, naming, and teleoperation for this robot.
+                Manage calibration and teleoperation for this robot.
               </p>
             </div>
             <div className="stack" style={{ minWidth: 200, alignItems: "flex-end" }}>
@@ -273,75 +267,13 @@ export default function RobotDetailPage() {
                   Calibrate
                 </button>
               )}
-              <button className="btn" onClick={() => void loadData()}>
-                Refresh status
-              </button>
-              <button className="btn btn-ghost" onClick={() => router.push("/")}>
-                Back to list
+              <button className="btn" onClick={openTeleopFlow} disabled={!robot}>
+                Teleoperate
               </button>
             </div>
             <p className="muted" style={{ marginTop: 6 }}>
-              Calibration opens in a dedicated flow. Teleoperation controls are below.
+              Calibration opens in a dedicated flow. Teleoperation launches from here into its own guided page.
             </p>
-          </div>
-
-          <div className="panel">
-            <div className="row" style={{ marginBottom: 8 }}>
-              <strong>Edit name</strong>
-              <div className="spacer" />
-              {savingName && <span className="muted">Saving...</span>}
-            </div>
-            <div className="row" style={{ gap: 8, flexWrap: "wrap" }}>
-              <input
-                value={nameInput}
-                onChange={(e) => setNameInput(e.target.value)}
-                placeholder="Robot name"
-              />
-              <button className="btn btn-primary" onClick={handleRename} disabled={!robot || savingName}>
-                Save
-              </button>
-            </div>
-            <p className="muted" style={{ marginTop: 6 }}>
-              Updating the name also renames the calibration file inside your lerobot cache.
-            </p>
-          </div>
-
-          <div className="panel">
-            <div className="row" style={{ marginBottom: 8 }}>
-              <strong>Teleoperation</strong>
-              <div className="spacer" />
-              {activeTeleop && <span className="tag">Live</span>}
-            </div>
-            {robot?.role !== "leader" ? (
-              <p className="muted">Teleoperation can only start from a leader arm.</p>
-            ) : (
-              <>
-                <p className="muted" style={{ marginTop: 0 }}>
-                  Pick a calibrated follower of the same model to drive from this leader.
-                </p>
-                <div className="row" style={{ gap: 8, flexWrap: "wrap", marginTop: 6 }}>
-                  <select value={selectedFollower} onChange={(e) => setSelectedFollower(e.target.value)}>
-                    <option value="">Select follower</option>
-                    {followerOptions.map((f) => (
-                      <option key={f.id} value={f.id}>
-                        {f.name} {f.has_calibration ? "" : "(needs calibration)"}
-                      </option>
-                    ))}
-                  </select>
-                  <button className="btn" onClick={startTeleopFlow} disabled={!robot}>
-                    Start teleop
-                  </button>
-                  <button className="btn btn-ghost" onClick={stopTeleop}>
-                    Stop
-                  </button>
-                </div>
-                {activeTeleop && (
-                  <p className="success" style={{ marginTop: 6 }}>
-                    Controlling {followerOptions.find((f) => f.id === activeTeleop.followerId)?.name || "follower"}.
-                  </p>
-                )}
-              </>
-            )}
           </div>
 
           <div className="panel" style={{ borderColor: "rgba(255, 107, 107, 0.3)" }}>
@@ -353,6 +285,17 @@ export default function RobotDetailPage() {
             <p className="muted" style={{ marginTop: 0 }}>
               These actions are optional. Delete the calibration if you need to reset it, or delete the robot entirely.
             </p>
+            <button
+              className="btn btn-ghost"
+              style={{ marginBottom: 10 }}
+              onClick={() => {
+                setNameInput(robot?.name || "");
+                setShowRenameModal(true);
+              }}
+              disabled={!robot}
+            >
+              Rename robot
+            </button>
             {robot?.has_calibration && (
               <button
                 className="btn btn-danger"
@@ -406,6 +349,72 @@ export default function RobotDetailPage() {
               <div className="spacer" />
               <button className="btn btn-danger" onClick={handleDeleteCalibration} disabled={loading}>
                 Delete calibration
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showRenameModal && (
+        <div className="modal">
+          <div className="panel" style={{ maxWidth: 420, width: "100%" }}>
+            <h3>Rename robot</h3>
+            <p className="muted" style={{ marginTop: 6 }}>
+              This also renames the calibration file on disk.
+            </p>
+            <div className="stack" style={{ marginTop: 10 }}>
+              <input
+                value={nameInput}
+                onChange={(e) => setNameInput(e.target.value)}
+                placeholder="Robot name"
+              />
+            </div>
+            <div className="divider" />
+            <div className="row" style={{ gap: 8 }}>
+              <button className="btn btn-ghost" onClick={() => setShowRenameModal(false)}>
+                Cancel
+              </button>
+              <div className="spacer" />
+              <button className="btn btn-primary" onClick={handleRename} disabled={!robot || savingName}>
+                Save
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showTeleopModal && (
+        <div className="modal">
+          <div className="panel" style={{ maxWidth: 480, width: "100%" }}>
+            <div className="row">
+              <h3>Start teleoperation</h3>
+              <div className="spacer" />
+              <button className="btn btn-ghost" onClick={() => setShowTeleopModal(false)}>
+                Close
+              </button>
+            </div>
+            <p className="muted" style={{ marginTop: 6 }}>
+              Choose a calibrated follower arm to control from this leader. Only followers are listed.
+            </p>
+            <div className="stack" style={{ marginTop: 10 }}>
+              <label>Follower</label>
+              <select value={selectedFollower} onChange={(e) => setSelectedFollower(e.target.value)}>
+                <option value="">Select follower</option>
+                {followerOptions.map((f) => (
+                  <option key={f.id} value={f.id}>
+                    {f.name} {f.has_calibration ? "" : "(needs calibration)"}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div className="divider" />
+            <div className="row" style={{ gap: 8 }}>
+              <button className="btn btn-ghost" onClick={() => setShowTeleopModal(false)}>
+                Cancel
+              </button>
+              <div className="spacer" />
+              <button className="btn btn-primary" onClick={startTeleopNavigation} disabled={!selectedFollower}>
+                Start teleop
               </button>
             </div>
           </div>

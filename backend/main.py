@@ -267,6 +267,14 @@ def start_teleop(payload: TeleopRequest) -> dict:
     return {"message": message, "dry_run": dry_run}
 
 
+@app.post("/teleop/stop")
+def stop_teleop(payload: TeleopRequest) -> dict:
+    leader = _with_status(_require_robot(payload.leader_id))
+    follower = _with_status(_require_robot(payload.follower_id))
+    # No long-running process tracked yet; this acts as an acknowledgement hook.
+    return {"message": f"Stopped teleop between {leader.name} and {follower.name}."}
+
+
 @app.websocket("/ws/robots")
 async def robots_stream(websocket: WebSocket) -> None:
     await websocket.accept()
