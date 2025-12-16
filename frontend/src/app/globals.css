@@ -126,6 +126,24 @@ a {
   color: var(--danger);
 }
 
+.btn-warning {
+  border-color: rgba(255, 179, 107, 0.6);
+  color: var(--accent-2);
+}
+
+.btn-warning-outline {
+  color: var(--accent-2);
+  border-color: var(--accent-2);
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.btn-warning-outline:hover {
+  border-color: rgba(255, 179, 107, 0.9);
+  background: rgba(255, 179, 107, 0.12);
+  box-shadow: 0 8px 18px rgba(255, 179, 107, 0.18);
+  transform: translateY(-1px);
+}
+
 .pill {
   padding: 6px 10px;
   border-radius: 10px;

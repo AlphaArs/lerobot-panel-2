@@ -40,14 +40,16 @@ export default function RobotDetailPage() {
       const [detail, list] = await Promise.all([fetchRobot(robotId), fetchRobots()]);
       setRobot(detail);
       setFleet(list);
-      setNameInput(detail.name);
+      if (!showRenameModal) {
+        setNameInput(detail.name);
+      }
       setSelectedFollower("");
     } catch (err) {
       setError(toMessage(err));
     } finally {
       setLoading(false);
     }
-  }, [robotId]);
+  }, [robotId, showRenameModal]);
 
   useEffect(() => {
     void loadData();
@@ -71,7 +73,9 @@ export default function RobotDetailPage() {
               const updated = (payload.robots || []).find((r: Robot) => r.id === robotId);
               if (updated) {
                 setRobot(updated);
-                setNameInput(updated.name);
+                if (!showRenameModal) {
+                  setNameInput(updated.name);
+                }
               }
             }
           }
@@ -91,7 +95,7 @@ export default function RobotDetailPage() {
       if (reconnectTimer) clearTimeout(reconnectTimer);
       if (socket) socket.close();
     };
-  }, [robotId]);
+  }, [robotId, showRenameModal]);
 
   const followerOptions = useMemo(
     () =>
@@ -104,6 +108,11 @@ export default function RobotDetailPage() {
       setSelectedFollower(followerOptions[0].id);
     }
   }, [selectedFollower, followerOptions]);
+
+  useEffect(() => {
+    if (!robot || showRenameModal) return;
+    setNameInput(robot.name);
+  }, [robot, showRenameModal]);
 
   const formatLastSeen = (value?: string | null) => {
     if (!value) return "Never seen online";
@@ -286,7 +295,7 @@ export default function RobotDetailPage() {
               These actions are optional. Delete the calibration if you need to reset it, or delete the robot entirely.
             </p>
             <button
-              className="btn btn-ghost"
+              className="btn btn-warning"
               style={{ marginBottom: 10 }}
               onClick={() => {
                 setNameInput(robot?.name || "");
@@ -366,7 +375,7 @@ export default function RobotDetailPage() {
               <input
                 value={nameInput}
                 onChange={(e) => setNameInput(e.target.value)}
-                placeholder="Robot name"
+                placeholder={robot?.name || "Robot name"}
               />
             </div>
             <div className="divider" />
