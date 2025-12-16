@@ -51,6 +51,7 @@ export default function Home() {
   const [calibrationLogs, setCalibrationLogs] = useState<string[]>([]);
   const [calibrationRunning, setCalibrationRunning] = useState(false);
   const [calibrationStarted, setCalibrationStarted] = useState(false);
+  const [calibrationStarting, setCalibrationStarting] = useState(false);
   const [calibrationReturnCode, setCalibrationReturnCode] = useState<number | null>(null);
   const [calibrationOverridePrompt, setCalibrationOverridePrompt] = useState<{
     sessionId: string;
@@ -189,16 +190,32 @@ export default function Home() {
       } catch {
         // ignore cleanup errors here
       }
-      cleanupCalibrationSession();
     }
-    setLoading(true);
-    setError(null);
+    cleanupCalibrationSession();
+    setCalibrationStarting(true);
+    setCalibrationReady(false);
+    setCalibrationTarget(robot);
+    setCalibrationJoints(
+      robot.calibration?.joints?.length ? robot.calibration.joints : seedJoints()
+    );
+    setCalibrationLogs([`Requesting calibration session for ${robot.name}...`]);
+    setCalibrationRanges({});
+    setCalibrationRunning(false);
+    setCalibrationStarted(false);
+    setCalibrationReturnCode(null);
     setCalibrationOverridePrompt(null);
     setCalibrationOverrideHandled(false);
+    setMessage("Preparing calibration session...");
+    setLoading(true);
+    setError(null);
     try {
       const res = await startCalibration(robot.id, false);
       setCalibrationSessionId(res.session_id);
-      setCalibrationLogs(res.logs || []);
+      const initialLogs =
+        res.logs && res.logs.length > 0
+          ? res.logs
+          : ["Session created. Waiting for device output..."];
+      setCalibrationLogs(initialLogs);
       setCalibrationRunning(res.running);
       setCalibrationReturnCode(res.return_code ?? null);
       setCalibrationRanges(
@@ -223,6 +240,7 @@ export default function Home() {
     } catch (err) {
       setError(toMessage(err));
     } finally {
+      setCalibrationStarting(false);
       setLoading(false);
     }
   };
@@ -247,6 +265,7 @@ export default function Home() {
     setCalibrationErrorJoints([]);
     setCalibrationOverridePrompt(null);
     setCalibrationOverrideHandled(false);
+    setCalibrationStarting(false);
   };
 
   useEffect(() => {
@@ -255,11 +274,11 @@ export default function Home() {
       calibrationTarget.calibration?.joints?.length
         ? calibrationTarget.calibration.joints
         : seedJoints();
-    if (!calibrationSessionId) {
+    if (!calibrationSessionId && !calibrationStarting) {
       setCalibrationReady(Boolean(calibrationTarget.calibration?.joints?.length));
     }
     setCalibrationJoints(joints);
-  }, [calibrationTarget, calibrationSessionId]);
+  }, [calibrationTarget, calibrationSessionId, calibrationStarting]);
 
   useEffect(() => {
     if (!calibrationSessionId) return;
@@ -292,7 +311,8 @@ export default function Home() {
             setCalibrationTarget(null);
             return;
           }
-          setCalibrationLogs(payload.logs || []);
+          const incomingLogs = payload.logs || [];
+          setCalibrationLogs((prev) => (incomingLogs.length ? incomingLogs : prev));
           setCalibrationRunning(Boolean(payload.running));
           setCalibrationReturnCode(
             typeof payload.return_code === "number" ? payload.return_code : null

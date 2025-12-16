@@ -1,0 +1,3 @@
+10 seconds delay after the calibration page is open
+
+throw different error when you detect (min max are at their max values) since this means the mid possition was not set.

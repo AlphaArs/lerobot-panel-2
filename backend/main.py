@@ -281,6 +281,6 @@ async def calibration_stream(websocket: WebSocket, session_id: str) -> None:
                 "ranges": snapshot["ranges"],
             }
             await websocket.send_json(payload)
-            await asyncio.sleep(0.5)
+            await asyncio.sleep(0.2)
     except WebSocketDisconnect:
         return

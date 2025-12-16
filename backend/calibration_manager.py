@@ -110,6 +110,7 @@ class CalibrationManager:
 
         state.process = process
         state.running = True
+        state.logs.append("Calibration process started. Waiting for device output...")
         self._store(state)
 
         Thread(target=self._consume_output, args=(state,), daemon=True).start()
