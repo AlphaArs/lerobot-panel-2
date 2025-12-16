@@ -26,7 +26,9 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en">
-      <body className={`${spaceGrotesk.variable} ${jetBrains.variable}`}>
+      <body
+        className={`${spaceGrotesk.variable} ${jetBrains.variable} bg-background text-foreground antialiased`}
+      >
         {children}
       </body>
     </html>

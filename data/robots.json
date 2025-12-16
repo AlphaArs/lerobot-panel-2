@@ -1,12 +1,12 @@
 {
   "robots": [
     {
-      "id": "31dfe686-cdb7-4f9f-9ca7-b7a0f1682865",
-      "name": "Leader01",
+      "id": "3d4ad3d8-c498-4ca8-b567-4cf527951a13",
+      "name": "Leader",
       "model": "so101",
       "role": "leader",
       "com_port": "COM10",
-      "last_seen": "2025-12-16T16:18:39.423510"
+      "last_seen": "2025-12-16T17:54:18.033830"
     }
   ]
 }

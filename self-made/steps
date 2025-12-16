@@ -1,3 +1,25 @@
+the buttons should be a solid color when hovered, and not contantly. When not hovered it should be an outline like it was before 
+
+
+There is no back button on the individual bot pages, and on the calibration page the green position is not aligned with the range / slider, its a little too high so it doesn't look right.
+
+and I don't like that some pages have a big ammount of varialbe declarations like this: 
+
+const panelClass =
+  "rounded-soft border border-border/70 bg-gradient-to-br from-panel to-panel-strong p-5 shadow-panel";
+const stackClass = "flex flex-col gap-3";
+const tagClass =...
+
+I don't like this, could you make it so that its a component, or that the buttons and stuff are components and stuff ? 
+
+
+
+---
+
+
+
+
+
 make layout the bot page page better 
 remove refresh status and back to list buttons in the commands section.
 also remove the edit name section and set a button in danger zone called rename button, that opens a edit name modal that shows us a input field, save button and a cancel button.

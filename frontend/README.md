@@ -20,6 +20,12 @@ You can start editing the page by modifying `app/page.tsx`. The page auto-update
 
 This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
 
+## Styling
+
+- Tailwind CSS is configured in `tailwind.config.ts` with the shared color palette and radii used across panels, badges, and buttons.
+- Global primitives live in `src/app/globals.css` using `@apply` utilities (e.g. `.panel`, `.btn`, `.tag`) so page components can stay lean.
+- Run `npm run lint` to validate TypeScript and lint rules; Tailwind classes are tree-shaken via the paths defined in the config.
+
 ## Learn More
 
 To learn more about Next.js, take a look at the following resources:
