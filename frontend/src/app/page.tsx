@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { useRouter } from "next/navigation";
 import {
   Calibration,
   JointCalibration,
@@ -37,6 +38,7 @@ const defaultWizard: WizardForm = {
 const toMessage = (err: unknown) => (err instanceof Error ? err.message : "Request failed");
 
 export default function Home() {
+  const router = useRouter();
   const [robots, setRobots] = useState<Robot[]>([]);
   const [ports, setPorts] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(false);
@@ -184,67 +186,8 @@ export default function Home() {
     }
   };
 
-  const handleCalibrate = async (robot: Robot) => {
-    if (calibrationSessionId) {
-      try {
-        await cancelCalibration(calibrationSessionId);
-      } catch {
-        // ignore cleanup errors here
-      }
-    }
-    cleanupCalibrationSession();
-    setCalibrationStarting(true);
-    setCalibrationReady(false);
-    setCalibrationTarget(robot);
-    setCalibrationJoints(
-      robot.calibration?.joints?.length ? robot.calibration.joints : seedJoints()
-    );
-    setCalibrationLogs([`Requesting calibration session for ${robot.name}...`]);
-    setCalibrationRanges({});
-    setCalibrationRunning(false);
-    setCalibrationStarted(false);
-    setCalibrationReturnCode(null);
-    setCalibrationOverridePrompt(null);
-    setCalibrationOverrideHandled(false);
-    setMessage("Preparing calibration session...");
-    setCalibrationWaitingForOutput(true);
-    setLoading(true);
-    setError(null);
-    try {
-      const res = await startCalibration(robot.id, false);
-      setCalibrationSessionId(res.session_id);
-      const initialLogs =
-        res.logs && res.logs.length > 0
-          ? res.logs
-          : ["Session created. Waiting for device output..."];
-      setCalibrationLogs(initialLogs);
-      setCalibrationRunning(res.running);
-      setCalibrationReturnCode(res.return_code ?? null);
-      setCalibrationRanges(
-        (res.ranges || []).reduce((acc, row) => {
-          acc[row.name] = row;
-          return acc;
-        }, {} as Record<string, { name: string; min: number; pos: number; max: number }>)
-      );
-      setCalibrationTarget(res.robot);
-      setCalibrationReady(res.dry_run);
-      const joints =
-        res.robot.calibration?.joints?.length
-          ? res.robot.calibration.joints
-          : seedJoints();
-      setCalibrationJoints(joints);
-      await refreshRobots();
-      const statusMessage = res.dry_run
-        ? "Calibration dry-run: nothing executed, but you can inspect joints."
-        : "Calibration routine kicked off. Set the arm to neutral, then press Start calibration.";
-      setMessage(statusMessage);
-      setCalibrationStarted(false);
-    } catch (err) {
-      setError(toMessage(err));
-    } finally {
-      setCalibrationStarting(false);
-      setLoading(false);
-    }
+  const handleCalibrate = (robot: Robot) => {
+    router.push(`/calibration?robot=${robot.id}`);
   };
 
   const seedJoints = (): JointCalibration[] => [
@@ -722,7 +665,7 @@ export default function Home() {
                     <button className="btn btn-primary" onClick={() => handleCalibrate(robot)}>
                       {robot.has_calibration ? "Recalibrate" : "Calibrate"}
                     </button>
-                    <button className="btn" onClick={() => setCalibrationTarget(robot)}>
+                    <button className="btn" onClick={() => router.push(`/calibration?robot=${robot.id}`)}>
                       Inspect
                     </button>
                     <button className="btn btn-danger" onClick={() => handleDelete(robot)}>
@@ -1202,24 +1145,6 @@ export default function Home() {
         </div>
       )}
       </main>
-      <style jsx global>{`
-        @keyframes spin {
-          from {
-            transform: rotate(0deg);
-          }
-          to {
-            transform: rotate(360deg);
-          }
-        }
-        @keyframes overlayFade {
-          from {
-            opacity: 0;
-          }
-          to {
-            opacity: 1;
-          }
-        }
-      `}</style>
     </>
   );
 }
