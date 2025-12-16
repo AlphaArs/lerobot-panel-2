@@ -33,6 +33,7 @@ def build_calibration_cmd(robot: Robot) -> list[str]:
     role_key = "teleop" if robot.role == "leader" else "robot"
     return [
         sys.executable,
+        "-u",  # unbuffered stdout/stderr so UI sees logs immediately
         "-m",
         "lerobot.scripts.lerobot_calibrate",
         f"--{role_key}.type={robot.device_type()}",

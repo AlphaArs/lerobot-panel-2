@@ -52,6 +52,7 @@ export default function Home() {
   const [calibrationRunning, setCalibrationRunning] = useState(false);
   const [calibrationStarted, setCalibrationStarted] = useState(false);
   const [calibrationStarting, setCalibrationStarting] = useState(false);
+  const [calibrationWaitingForOutput, setCalibrationWaitingForOutput] = useState(false);
   const [calibrationReturnCode, setCalibrationReturnCode] = useState<number | null>(null);
   const [calibrationOverridePrompt, setCalibrationOverridePrompt] = useState<{
     sessionId: string;
@@ -206,6 +207,7 @@ export default function Home() {
     setCalibrationOverridePrompt(null);
     setCalibrationOverrideHandled(false);
     setMessage("Preparing calibration session...");
+    setCalibrationWaitingForOutput(true);
     setLoading(true);
     setError(null);
     try {
@@ -266,6 +268,7 @@ export default function Home() {
     setCalibrationOverridePrompt(null);
     setCalibrationOverrideHandled(false);
     setCalibrationStarting(false);
+    setCalibrationWaitingForOutput(false);
   };
 
   useEffect(() => {
@@ -374,6 +377,22 @@ export default function Home() {
       setCalibrationStarted(false);
     }
   }, [calibrationSessionId, calibrationLogs, calibrationOverrideHandled, calibrationOverridePrompt]);
+
+  useEffect(() => {
+    if (!calibrationWaitingForOutput) return;
+    const placeholderTokens = [
+      "requesting calibration session",
+      "session created. waiting for device output",
+      "calibration process started. waiting for device output",
+    ];
+    const hasRealOutput = calibrationLogs.some((line) => {
+      const lower = line.toLowerCase();
+      return !placeholderTokens.some((token) => lower.includes(token));
+    });
+    if (hasRealOutput) {
+      setCalibrationWaitingForOutput(false);
+    }
+  }, [calibrationLogs, calibrationWaitingForOutput]);
 
   useEffect(() => {
     if (!calibrationSessionId) return;
@@ -618,7 +637,8 @@ export default function Home() {
   };
 
   return (
-    <main className="page">
+    <>
+      <main className="page">
       <header className="panel" style={{ marginBottom: 16 }}>
         <div className="row">
           <div>
@@ -858,7 +878,7 @@ export default function Home() {
 
       {calibrationTarget && (
         <div className="modal">
-          <div className="panel" style={{ maxWidth: 720, width: "100%" }}>
+          <div className="panel" style={{ maxWidth: 720, width: "100%", position: "relative", overflow: "hidden" }}>
             <div className="row">
               <h3>Calibrate {calibrationTarget.name}</h3>
               <div className="spacer" />
@@ -866,6 +886,35 @@ export default function Home() {
                 Close
               </button>
             </div>
+            {calibrationWaitingForOutput && (
+              <div
+                style={{
+                  position: "absolute",
+                  inset: 0,
+                  background: "linear-gradient(135deg, rgba(0,0,0,0.6), rgba(0,0,0,0.35))",
+                  backdropFilter: "blur(2px)",
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  zIndex: 5,
+                  animation: "overlayFade 0.4s ease-in-out",
+                }}
+              >
+                <div style={{ display: "flex", alignItems: "center", gap: 12, color: "white" }}>
+                  <div
+                    style={{
+                      width: 36,
+                      height: 36,
+                      borderRadius: "50%",
+                      border: "3px solid rgba(255,255,255,0.35)",
+                      borderTopColor: "white",
+                      animation: "spin 1s linear infinite",
+                    }}
+                  />
+                  <div style={{ fontSize: 16, fontWeight: 600 }}>Setting things up...</div>
+                </div>
+              </div>
+            )}
             <p className="notice">
               Place the arm in the neutral pose first. When you are ready, hit Start calibration to send ENTER,
               move through each joint range, then use End calibration to finish the sweep.
@@ -1152,6 +1201,25 @@ export default function Home() {
           </div>
         </div>
       )}
-    </main>
+      </main>
+      <style jsx global>{`
+        @keyframes spin {
+          from {
+            transform: rotate(0deg);
+          }
+          to {
+            transform: rotate(360deg);
+          }
+        }
+        @keyframes overlayFade {
+          from {
+            opacity: 0;
+          }
+          to {
+            opacity: 1;
+          }
+        }
+      `}</style>
+    </>
   );
 }

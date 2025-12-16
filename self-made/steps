@@ -1,3 +1,8 @@
 10 seconds delay after the calibration page is open
 
+
+Instead of having a terminal opened when we start calibration page, maybe contantly have a terminal or socket open, where all executed commands are sent to. so I open the app in the background this is ready, the command is sent when I open the calibration page. and if I cancel or leave the page it just CTRL + C or just cancels the action. 
+and later when we have other action and stuff it sends the different commands in the same terminal. but yeah this means we never should or could send or do different actions at the same moment.
+
+
 throw different error when you detect (min max are at their max values) since this means the mid possition was not set.
