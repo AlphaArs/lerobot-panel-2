@@ -1,3 +1,22 @@
+make layout the bot page page better 
+remove refresh status and back to list buttons in the commands section.
+also remove the edit name section and set a button in danger zone called rename button, that opens a edit name modal that shows us a input field, save button and a cancel button.
+
+ actually add a teleoperate button in the commands section, and make it open a modal popup for teleoperatio nwhere we can only select a follower bot. and have a button to start the teleop. or cancel
+
+if we press start teleop we are brought on a teleop page, just like the calibration page we instantly get a modal popup telling us we need to set the bots in roighly the same position to be sure we won't damage anything. and if we press next the modal closes and the teleopt actually starts. this is an example of the command that needs to be ran: lerobot-teleoperate --robot.type=so101_follower --robot.port=COM13 --robot.id=follower_arm --teleop.type=so101_leader --teleop.port=COM14 --teleop.id=leader_arm
+
+
+execute this in the same way as done on the calibration page. And do use the right fields obviously.
+
+and just like the calibration add a button somewere to be avle to see the output of the terminal.
+On that page we see what is the leader arm and what is the follower arm. 
+and we have a stop buton somewhere on that page which will stop the teleopt. we will stay on that page thouhg once we stop and the stop button disapears and let us see the start teleopt button that will start the same command again. at the top there also is a back button, this can bring us back and also stops the teleopt in each case.
+---
+
+make layout of the home page better  
+
+---
 
 
 ---
