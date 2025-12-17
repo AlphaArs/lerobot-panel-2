@@ -27,7 +27,7 @@ export default function RobotDetailPage() {
   const [message, setMessage] = useState<string | null>(null);
   const [nameInput, setNameInput] = useState("");
   const [savingName, setSavingName] = useState(false);
-  const [selectedFollower, setSelectedFollower] = useState("");
+  const [selectedTeleopPartner, setSelectedTeleopPartner] = useState("");
   const [showDeleteModal, setShowDeleteModal] = useState(false);
   const [showDeleteCalibrationModal, setShowDeleteCalibrationModal] = useState(false);
   const [showRenameModal, setShowRenameModal] = useState(false);
@@ -44,7 +44,7 @@ export default function RobotDetailPage() {
       if (!showRenameModal) {
         setNameInput(detail.name);
       }
-      setSelectedFollower("");
+      setSelectedTeleopPartner("");
     } catch (err) {
       setError(toMessage(err));
     } finally {
@@ -104,11 +104,19 @@ export default function RobotDetailPage() {
     [fleet, robot]
   );
 
+  const leaderOptions = useMemo(
+    () =>
+      fleet.filter((r) => r.role === "leader" && r.model === robot?.model && r.id !== robot?.id),
+    [fleet, robot]
+  );
+
   useEffect(() => {
-    if (!selectedFollower && followerOptions.length > 0) {
-      setSelectedFollower(followerOptions[0].id);
+    if (!robot) return;
+    const options = robot.role === "leader" ? followerOptions : leaderOptions;
+    if (!selectedTeleopPartner && options.length > 0) {
+      setSelectedTeleopPartner(options[0].id);
     }
-  }, [selectedFollower, followerOptions]);
+  }, [selectedTeleopPartner, followerOptions, leaderOptions, robot]);
 
   useEffect(() => {
     if (!robot || showRenameModal) return;
@@ -182,8 +190,8 @@ export default function RobotDetailPage() {
 
   const openTeleopFlow = () => {
     if (!robot) return;
-    if (robot.role !== "leader") {
-      setError("Teleoperation can only be started from a leader arm.");
+    if (robot.role !== "leader" && robot.role !== "follower") {
+      setError("Unsupported robot role for teleoperation.");
       return;
     }
     setShowTeleopModal(true);
@@ -191,11 +199,14 @@ export default function RobotDetailPage() {
 
   const startTeleopNavigation = () => {
     if (!robot) return;
-    if (!selectedFollower) {
-      setError("Pick a follower to teleoperate.");
+    if (!selectedTeleopPartner) {
+      setError(robot.role === "leader" ? "Pick a follower to teleoperate." : "Pick a leader to control from.");
       return;
     }
-    router.push(`/teleop?leader=${robot.id}&follower=${selectedFollower}`);
+
+    const leaderId = robot.role === "leader" ? robot.id : selectedTeleopPartner;
+    const followerId = robot.role === "leader" ? selectedTeleopPartner : robot.id;
+    router.push(`/teleop?leader=${leaderId}&follower=${followerId}`);
   };
 
   return (
@@ -384,15 +395,20 @@ export default function RobotDetailPage() {
               </Button>
             </div>
             <p className="text-sm text-muted">
-              Choose a calibrated follower arm to control from this leader. Only followers are listed.
+              {robot?.role === "follower"
+                ? "Choose a calibrated leader arm to control this follower from. Only leaders are listed."
+                : "Choose a calibrated follower arm to control from this leader. Only followers are listed."}
             </p>
             <Stack>
-              <label>Follower</label>
-              <select value={selectedFollower} onChange={(e) => setSelectedFollower(e.target.value)}>
-                <option value="">Select follower</option>
-                {followerOptions.map((f) => (
-                  <option key={f.id} value={f.id}>
-                    {f.name} {f.has_calibration ? "" : "(needs calibration)"}
+              <label>{robot?.role === "follower" ? "Leader" : "Follower"}</label>
+              <select
+                value={selectedTeleopPartner}
+                onChange={(e) => setSelectedTeleopPartner(e.target.value)}
+              >
+                <option value="">{robot?.role === "follower" ? "Select leader" : "Select follower"}</option>
+                {(robot?.role === "follower" ? leaderOptions : followerOptions).map((candidate) => (
+                  <option key={candidate.id} value={candidate.id}>
+                    {candidate.name} {candidate.has_calibration ? "" : "(needs calibration)"}
                   </option>
                 ))}
               </select>
@@ -403,7 +419,7 @@ export default function RobotDetailPage() {
                 Cancel
               </Button>
               <Spacer />
-              <Button variant="primary" onClick={startTeleopNavigation} disabled={!selectedFollower}>
+              <Button variant="primary" onClick={startTeleopNavigation} disabled={!selectedTeleopPartner}>
                 Start teleop
               </Button>
             </div>

@@ -29,6 +29,14 @@ def _build_env() -> Dict[str, str]:
     return env
 
 
+def _resolve_console_script(name: str) -> str | None:
+    suffix = ".exe" if os.name == "nt" else ""
+    candidate = Path(sys.executable).resolve().parent / f"{name}{suffix}"
+    if candidate.exists():
+        return str(candidate)
+    return shutil.which(name)
+
+
 def build_calibration_cmd(robot: Robot) -> list[str]:
     role_key = "teleop" if robot.role == "leader" else "robot"
     return [
@@ -63,12 +71,16 @@ def run_calibration(robot: Robot, *, dry_run: bool = False) -> Tuple[bool, str]:
     return False, f"Calibration command failed with code {result.returncode}."
 
 
-def run_teleop(leader: Robot, follower: Robot, *, dry_run: bool = False) -> Tuple[bool, str]:
-    """
-    Placeholder hook for teleoperation. The actual command is project-specific; for now
-    we simply acknowledge the request.
-    """
-    if dry_run:
-        return True, "[dry-run] Teleop request accepted."
-    # This is intentionally minimal so it can be swapped with the real command later.
-    return True, f"Ready to teleoperate {follower.name} from {leader.name}."
+def build_teleop_cmd(leader: Robot, follower: Robot) -> list[str]:
+    args = [
+        f"--robot.type={follower.device_type()}",
+        f"--robot.port={follower.com_port}",
+        f"--robot.id={follower.name}",
+        f"--teleop.type={leader.device_type()}",
+        f"--teleop.port={leader.com_port}",
+        f"--teleop.id={leader.name}",
+    ]
+    entrypoint = _resolve_console_script("lerobot-teleoperate")
+    if entrypoint:
+        return [entrypoint, *args]
+    return [sys.executable, "-u", "-m", "lerobot.scripts.lerobot_teleoperate", *args]

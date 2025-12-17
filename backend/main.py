@@ -11,7 +11,7 @@ from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 
 from .calibration_manager import CalibrationManager
-from .commands import run_teleop
+from .commands import _find_repo_root
 from .device_monitor import DeviceMonitor
 from .models import (
     Calibration,
@@ -25,6 +25,7 @@ from .models import (
     TeleopRequest,
 )
 from .storage import RobotStore
+from .teleop_manager import TeleopManager
 
 app = FastAPI(title="LeRobot control backend")
 
@@ -39,6 +40,7 @@ app.add_middleware(
 store = RobotStore()
 monitor = DeviceMonitor()
 calibration_manager = CalibrationManager()
+teleop_manager = TeleopManager()
 
 
 @app.on_event("startup")
@@ -50,6 +52,11 @@ def _allow_real_commands() -> bool:
     env_flag = os.environ.get("LEROBOT_DRY_RUN")
     if env_flag is not None:
         return env_flag.lower() in ("0", "false", "no")
+
+    # This repo includes LeRobot as a local subproject (./lerobot/src). Even if it's not installed in the
+    # backend venv, subprocess commands can import it thanks to _build_env() adding it to PYTHONPATH.
+    if _find_repo_root() is not None:
+        return True
     try:
         return importlib.util.find_spec("lerobot") is not None
     except Exception:
@@ -260,19 +267,32 @@ def start_teleop(payload: TeleopRequest) -> dict:
         raise HTTPException(status_code=400, detail="Teleop must start from a leader arm.")
 
     dry_run = not _allow_real_commands()
-    ok, message = run_teleop(leader, follower, dry_run=dry_run)
+    ok, message, state = teleop_manager.start(leader, follower, dry_run=dry_run)
     if not ok:
-        raise HTTPException(status_code=500, detail=message)
+        status = 409 if "already running" in message.lower() else 500
+        raise HTTPException(status_code=status, detail=message)
 
-    return {"message": message, "dry_run": dry_run}
+    return {
+        "message": message,
+        "dry_run": dry_run,
+        "session_id": state.id,
+        "command": state.readable_cmd,
+        "pid": state.process.pid if state.process else None,
+    }
 
 
 @app.post("/teleop/stop")
 def stop_teleop(payload: TeleopRequest) -> dict:
     leader = _with_status(_require_robot(payload.leader_id))
     follower = _with_status(_require_robot(payload.follower_id))
-    # No long-running process tracked yet; this acts as an acknowledgement hook.
-    return {"message": f"Stopped teleop between {leader.name} and {follower.name}."}
+    ok, message, state = teleop_manager.stop(leader.id, follower.id)
+    if not ok:
+        raise HTTPException(status_code=400, detail=message)
+    return {
+        "message": message,
+        "session_id": state.id if state else None,
+        "return_code": state.return_code if state else None,
+    }
 
 
 @app.websocket("/ws/robots")
@@ -326,6 +346,23 @@ async def calibration_stream(websocket: WebSocket, session_id: str) -> None:
                 "ranges": snapshot["ranges"],
             }
             await websocket.send_json(payload)
+            await asyncio.sleep(0.2)
+    except WebSocketDisconnect:
+        return
+
+
+@app.websocket("/ws/teleop/{session_id}")
+async def teleop_stream(websocket: WebSocket, session_id: str) -> None:
+    await websocket.accept()
+    try:
+        while True:
+            state = teleop_manager.get(session_id)
+            if not state:
+                await websocket.send_json({"error": "not_found", "session_id": session_id})
+                await websocket.close(code=4404)
+                return
+
+            await websocket.send_json(state.snapshot())
             await asyncio.sleep(0.2)
     except WebSocketDisconnect:
         return
