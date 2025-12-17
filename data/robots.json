@@ -6,7 +6,7 @@
       "model": "so101",
       "role": "leader",
       "com_port": "COM10",
-      "last_seen": "2025-12-17T11:12:48.609740"
+      "last_seen": "2025-12-17T13:26:58.384785"
     },
     {
       "id": "0a367e67-affc-4981-ab40-a849e08e466b",
@@ -14,7 +14,7 @@
       "model": "so101",
       "role": "follower",
       "com_port": "COM11",
-      "last_seen": "2025-12-17T11:13:10.697710"
+      "last_seen": "2025-12-17T13:26:58.385791"
     }
   ]
 }

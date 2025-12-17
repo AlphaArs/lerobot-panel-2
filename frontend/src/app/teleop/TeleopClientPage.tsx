@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Robot, fetchRobots, robotsWsUrl, startTeleop, stopTeleop, teleopWsUrl } from "@/lib/api";
 
@@ -24,6 +24,77 @@ export default function TeleopPage() {
   const [consoleMounted, setConsoleMounted] = useState(false);
   const [safetyModal, setSafetyModal] = useState(true);
   const [sessionId, setSessionId] = useState<string | null>(null);
+  const [teleopStarting, setTeleopStarting] = useState(false);
+  const [disconnectModalOpen, setDisconnectModalOpen] = useState(false);
+  const [disconnectAlertRoles, setDisconnectAlertRoles] = useState<Array<"leader" | "follower">>([]);
+
+  const previousStatuses = useRef<{ leader?: Robot["status"]; follower?: Robot["status"] }>({});
+  const teleopStartingRef = useRef(false);
+  const runningRef = useRef(false);
+  const suppressDisconnectModalUntilRef = useRef(0);
+
+  useEffect(() => {
+    teleopStartingRef.current = teleopStarting;
+  }, [teleopStarting]);
+
+  useEffect(() => {
+    runningRef.current = running;
+  }, [running]);
+
+  const isTeleopConfirmedStartedFromLogs = (maybeLogs: unknown) => {
+    if (!Array.isArray(maybeLogs)) return false;
+
+    const lines = maybeLogs.filter((line): line is string => typeof line === "string").map((line) => line.trim());
+    if (lines.some((line) => /^time:\s/i.test(line))) return true;
+
+    const leaderConnected = lines.some((line) => /\bleader\b.*\bconnected\.\b/i.test(line));
+    const followerConnected = lines.some((line) => /\bfollower\b.*\bconnected\.\b/i.test(line));
+    return leaderConnected && followerConnected;
+  };
+
+  const inferDisconnectFromLogs = (maybeLogs: unknown) => {
+    if (!Array.isArray(maybeLogs)) return null;
+    const lines = maybeLogs
+      .filter((line): line is string => typeof line === "string")
+      .map((line) => line.trim())
+      .filter(Boolean);
+
+    const errorMarkers = [
+      "serialtimeoutexception",
+      "write timeout",
+      "could not open port",
+      "file not found",
+      "filenotfounderror",
+      "permissionerror",
+      "access is denied",
+      "no such file or directory",
+    ];
+
+    const hasDisconnectMarker = lines.some((line) => {
+      const lowered = line.toLowerCase();
+      return errorMarkers.some((marker) => lowered.includes(marker));
+    });
+    if (!hasDisconnectMarker) return null;
+
+    const leaderHints = ["so101_leader", "so100_leader", "01_leader.py", "leader.py", "so101leader"];
+    const followerHints = ["so101_follower", "so100_follower", "follower.py", "so101follower"];
+
+    const mentionsLeader = lines.some((line) => {
+      const lowered = line.toLowerCase();
+      return leaderHints.some((hint) => lowered.includes(hint));
+    });
+    const mentionsFollower = lines.some((line) => {
+      const lowered = line.toLowerCase();
+      return followerHints.some((hint) => lowered.includes(hint));
+    });
+
+    if (mentionsLeader && !mentionsFollower) return { role: "leader" as const };
+    if (mentionsFollower && !mentionsLeader) return { role: "follower" as const };
+    return { role: "follower" as const };
+  };
+
+  const mergeDisconnectRoles = (existing: Array<"leader" | "follower">, incoming: Array<"leader" | "follower">) =>
+    Array.from(new Set([...existing, ...incoming]));
 
   useEffect(() => {
     const load = async () => {
@@ -84,6 +155,11 @@ export default function TeleopPage() {
     setMessage(null);
     setError(null);
     setSafetyModal(true);
+    setTeleopStarting(false);
+    setDisconnectModalOpen(false);
+    setDisconnectAlertRoles([]);
+    previousStatuses.current = {};
+    suppressDisconnectModalUntilRef.current = 0;
   }, [leaderId, followerId]);
 
   useEffect(() => {
@@ -105,6 +181,29 @@ export default function TeleopPage() {
           if (typeof payload?.running === "boolean") {
             setRunning(payload.running);
           }
+
+          if (teleopStartingRef.current || runningRef.current) {
+            const inferred = inferDisconnectFromLogs(payload?.logs);
+            if (inferred?.role === "leader" && leader) {
+              setDisconnectModalOpen(true);
+              setDisconnectAlertRoles((existing) => mergeDisconnectRoles(existing, ["leader"]));
+            } else if (inferred?.role === "follower" && follower) {
+              setDisconnectModalOpen(true);
+              setDisconnectAlertRoles((existing) => mergeDisconnectRoles(existing, ["follower"]));
+            }
+          }
+
+          if (
+            teleopStartingRef.current &&
+            isTeleopConfirmedStartedFromLogs(payload?.logs)
+          ) {
+            setTeleopStarting(false);
+            setSafetyModal(false);
+          }
+          if (teleopStartingRef.current && payload?.return_code != null && payload?.running === false) {
+            setTeleopStarting(false);
+            setError(`Teleop exited during startup (code=${payload.return_code}).`);
+          }
           if (payload?.return_code != null && payload?.running === false) {
             setMessage(`Teleop exited (code=${payload.return_code}).`);
           }
@@ -120,6 +219,30 @@ export default function TeleopPage() {
       if (socket) socket.close();
     };
   }, [sessionId]);
+
+  useEffect(() => {
+    if (!leaderId || !followerId) return;
+
+    const leaderSnap = robots.find((r) => r.id === leaderId);
+    const followerSnap = robots.find((r) => r.id === followerId);
+    const leaderStatus = leaderSnap?.status;
+    const followerStatus = followerSnap?.status;
+
+    const offlineRoles: Array<"leader" | "follower"> = [];
+    if (leaderStatus === "offline") offlineRoles.push("leader");
+    if (followerStatus === "offline") offlineRoles.push("follower");
+    if (offlineRoles.length > 0) {
+      setDisconnectAlertRoles((existing) => mergeDisconnectRoles(existing, offlineRoles));
+      if (Date.now() >= suppressDisconnectModalUntilRef.current) {
+        setDisconnectModalOpen(true);
+      }
+    }
+
+    previousStatuses.current = {
+      leader: leaderStatus,
+      follower: followerStatus,
+    };
+  }, [robots, leaderId, followerId]);
 
   useEffect(() => {
     if (showConsole) {
@@ -150,6 +273,9 @@ export default function TeleopPage() {
       return;
     }
     setLoading(true);
+    setTeleopStarting(true);
+    setShowConsole(true);
+    suppressDisconnectModalUntilRef.current = Date.now() + 2500;
     setError(null);
     setMessage(null);
     setLogs([`Starting: ${commandString}`]);
@@ -158,10 +284,13 @@ export default function TeleopPage() {
       setMessage(res.message);
       setSessionId(res.session_id || null);
       setRunning(!res.dry_run);
-      setSafetyModal(false);
-      setShowConsole(true);
+      if (res.dry_run) {
+        setTeleopStarting(false);
+        setSafetyModal(false);
+      }
     } catch (err) {
       setError(toMessage(err));
+      setTeleopStarting(false);
     } finally {
       setLoading(false);
     }
@@ -195,6 +324,24 @@ export default function TeleopPage() {
     }
     router.push(`/robots/${leader?.id ?? ""}`);
   };
+
+  const leaderOnline = leader?.status === "online";
+  const followerOnline = follower?.status === "online";
+  const bothConnected = Boolean(leaderOnline && followerOnline);
+
+  const disconnectedNow = useMemo(() => {
+    const parts: string[] = [];
+    if (!leaderOnline && leader) parts.push(`Leader: ${leader.name}`);
+    if (!followerOnline && follower) parts.push(`Follower: ${follower.name}`);
+    return parts;
+  }, [leader, follower, leaderOnline, followerOnline]);
+
+  const disconnectedRemembered = useMemo(() => {
+    const parts: string[] = [];
+    if (disconnectAlertRoles.includes("leader") && leader) parts.push(`Leader: ${leader.name}`);
+    if (disconnectAlertRoles.includes("follower") && follower) parts.push(`Follower: ${follower.name}`);
+    return parts;
+  }, [disconnectAlertRoles, leader, follower]);
 
   if (!leaderId || !followerId) {
     return (
@@ -264,15 +411,36 @@ export default function TeleopPage() {
           <div className="panel">
             <div className="row" style={{ gap: 8, flexWrap: "wrap" }}>
               {running ? (
-                <button className="btn btn-danger" onClick={() => stop(false)} disabled={loading}>
+                <button className="btn btn-danger" onClick={() => stop(false)} disabled={loading || teleopStarting}>
                   Stop teleop
                 </button>
               ) : (
-                <button className="btn btn-primary" onClick={() => setSafetyModal(true)} disabled={loading}>
+                <button
+                  className="btn btn-primary"
+                  onClick={() => {
+                    if (!bothConnected) {
+                      setDisconnectModalOpen(true);
+                      setDisconnectAlertRoles((existing) =>
+                        mergeDisconnectRoles(existing, [
+                          ...(leaderOnline ? [] : (["leader"] as const)),
+                          ...(followerOnline ? [] : (["follower"] as const)),
+                        ])
+                      );
+                      return;
+                    }
+                    setSafetyModal(true);
+                  }}
+                  disabled={loading || teleopStarting || !bothConnected}
+                >
                   Start teleop
                 </button>
               )}
             </div>
+            {!bothConnected && (
+              <p className="muted" style={{ marginBottom: 0, marginTop: 10 }}>
+                Both leader and follower must be online to start.
+              </p>
+            )}
           </div>
 
           {consoleMounted && (
@@ -343,13 +511,107 @@ export default function TeleopPage() {
               </svg>
             </div>
             <div className="row" style={{ justifyContent: "center", gap: 10, marginTop: 14 }}>
-              <button className="btn btn-ghost" onClick={handleBack}>
+              <button className="btn btn-ghost" onClick={handleBack} disabled={loading}>
                 Cancel
               </button>
-              <button className="btn btn-primary" onClick={start} disabled={loading}>
+              <button
+                className="btn btn-primary-ghost"
+                onClick={start}
+                disabled={loading || teleopStarting || !bothConnected}
+                style={{
+                  display: "grid",
+                  gridTemplateColumns: "16px auto 16px",
+                  columnGap: 8,
+                  alignItems: "center",
+                  justifyItems: "center",
+                  padding: "8px 12px",
+                  transform: teleopStarting ? "scale(1.03)" : "scale(1)",
+                  transition: "transform 220ms ease",
+                }}
+              >
+                <span aria-hidden="true" style={{ width: 16, height: 16, display: "inline-block" }} />
+                <span style={{ textAlign: "center" }}>{teleopStarting ? "Starting" : "Start"}</span>
+                <span
+                  className={teleopStarting ? "spinner" : "spinner invisible"}
+                  aria-hidden="true"
+                />
+              </button>
+            </div>
+            <p className="muted" style={{ marginBottom: 0, marginTop: 12, minHeight: 18 }}>
+              {!bothConnected
+                ? "Waiting for both devices to be online..."
+                : teleopStarting
+                  ? "Waiting for the robot to connect..."
+                  : " "}
+            </p>
+          </div>
+        </div>
+      )}
+
+      {disconnectModalOpen && (
+        <div className="modal" style={{ zIndex: 40, background: "rgba(0, 0, 0, 0.72)" }}>
+          <div className="panel" style={{ maxWidth: 560, width: "100%" }}>
+            <p className="tag" style={{ display: "inline-flex", marginBottom: 10 }}>
+              Warning
+            </p>
+            <h3 style={{ marginTop: 0, marginBottom: 8 }}>Device disconnected</h3>
+            <p className="muted" style={{ marginTop: 0 }}>
+              {disconnectedNow.length > 0
+                ? `Disconnected: ${disconnectedNow.join(" • ")}`
+                : disconnectedRemembered.length > 0
+                  ? `Disconnected: ${disconnectedRemembered.join(" • ")}`
+                  : "A teleoperation device disconnected."}
+            </p>
+
+            <div className="divider" />
+            <div className="stack" style={{ gap: 10 }}>
+              <div className="row" style={{ justifyContent: "space-between" }}>
+                <span className="muted">Leader</span>
+                <span className={`tag ${leaderOnline ? "online" : "offline"}`}>{leaderOnline ? "online" : "offline"}</span>
+              </div>
+              <div className="row" style={{ justifyContent: "space-between" }}>
+                <span className="muted">Follower</span>
+                <span className={`tag ${followerOnline ? "online" : "offline"}`}>{followerOnline ? "online" : "offline"}</span>
+              </div>
+            </div>
+
+            <div className="row" style={{ gap: 10, justifyContent: "flex-end", marginTop: 14 }}>
+              <button
+                className="btn btn-ghost"
+                onClick={async () => {
+                  setDisconnectModalOpen(false);
+                  setDisconnectAlertRoles([]);
+                  try {
+                    if (running) await stop(false);
+                  } catch {
+                    // ignore
+                  }
+                  router.push(`/robots/${leader?.id ?? ""}`);
+                }}
+                disabled={loading}
+              >
+                Leave
+              </button>
+              <button
+                className="btn btn-primary-ghost"
+                onClick={async () => {
+                  setDisconnectModalOpen(false);
+                  setDisconnectAlertRoles([]);
+                  if (running) {
+                    await stop(false);
+                  }
+                  setSafetyModal(true);
+                }}
+                disabled={loading || !bothConnected}
+              >
                 Next
               </button>
             </div>
+            {!bothConnected && (
+              <p className="muted" style={{ marginBottom: 0, marginTop: 12 }}>
+                Reconnect both devices to continue.
+              </p>
+            )}
           </div>
         </div>
       )}

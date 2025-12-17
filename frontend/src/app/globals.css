@@ -92,6 +92,10 @@
     @apply border-transparent bg-transparent text-muted hover:bg-white/10 hover:text-foreground;
   }
 
+  .btn-primary-ghost {
+    @apply border-[#3c9c7a] bg-transparent text-accent hover:bg-white/10 hover:border-[#3c9c7a] hover:text-accent;
+  }
+
   .btn-danger {
     @apply border-[#b13a3a] bg-transparent text-danger hover:border-[#9e2f2f] hover:bg-[#9e2f2f] hover:text-white;
   }
@@ -164,5 +168,16 @@
 
   .robot-placeholder {
     @apply mx-auto mb-3 flex w-full max-w-md items-center justify-center rounded-xl border border-dashed border-[#1a2a44] bg-panel p-5;
+  }
+
+  .spinner {
+    @apply inline-block h-4 w-4 rounded-full border-2 border-foreground/30 border-t-foreground;
+    animation: spin 0.8s linear infinite;
+  }
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
   }
 }
