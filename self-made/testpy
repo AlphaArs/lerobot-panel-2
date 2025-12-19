@@ -1,0 +1,5 @@
+import cv2
+
+# Replace with the exact Windows DirectShow camera name
+cap = cv2.VideoCapture("video=YOUR CAMERA NAME", cv2.CAP_DSHOW)
+print("opened:", cap.isOpened())

@@ -9,6 +9,44 @@ export type JointCalibration = {
   current: number;
 };
 
+export type CameraMode = {
+  width: number;
+  height: number;
+  fps: number;
+};
+
+export type CameraDevice = {
+  id: string;
+  label: string;
+  kind: "opencv" | "realsense";
+  index?: number | null;
+  path?: string | null;
+  serial_number?: string | null;
+  vendor_id?: string | null;
+  product_id?: string | null;
+  suggested?: CameraMode | null;
+};
+
+export type CameraProbe = {
+  device: CameraDevice;
+  modes: CameraMode[];
+  suggested?: CameraMode | null;
+};
+
+export type RobotCamera = {
+  id: string;
+  name: string;
+  device_id: string;
+  kind: "opencv" | "realsense";
+  path?: string | null;
+  serial_number?: string | null;
+  width: number;
+  height: number;
+  fps: number;
+  index?: number | null;
+  created_at?: string;
+};
+
 export type Calibration = {
   joints: JointCalibration[];
   updated_at?: string;
@@ -33,12 +71,14 @@ export type Robot = {
   status: "online" | "offline";
   has_calibration: boolean;
   calibration?: Calibration | null;
+  cameras: RobotCamera[];
   last_seen?: string | null;
 };
 
 export const API_BASE = process.env.NEXT_PUBLIC_API_BASE || "http://localhost:8000";
 const WS_BASE = API_BASE.replace(/^http/i, "ws");
 export const robotsWsUrl = `${WS_BASE}/ws/robots`;
+export const camerasWsUrl = `${WS_BASE}/ws/cameras`;
 export const calibrationWsUrl = (sessionId: string) => `${WS_BASE}/ws/calibration/${sessionId}`;
 export const teleopWsUrl = (sessionId: string) => `${WS_BASE}/ws/teleop/${sessionId}`;
 
@@ -77,6 +117,31 @@ export function fetchPorts(): Promise<Record<string, string>> {
   return request<{ ports: Record<string, string> }>("/ports").then((r) => r.ports);
 }
 
+export function fetchCameras(): Promise<CameraDevice[]> {
+  return request<CameraDevice[]>("/cameras");
+}
+
+export function probeCameraDevice(id: string): Promise<CameraProbe> {
+  return request<CameraProbe>(`/cameras/${id}/probe`);
+}
+
+export async function fetchCameraSnapshot(
+  id: string,
+  opts: { width?: number; height?: number; fps?: number } = {}
+): Promise<Blob> {
+  const params = new URLSearchParams();
+  if (opts.width) params.set("width", String(opts.width));
+  if (opts.height) params.set("height", String(opts.height));
+  if (opts.fps) params.set("fps", String(opts.fps));
+  const res = await fetch(`${API_BASE}/cameras/${encodeURIComponent(id)}/snapshot?${params.toString()}`, {
+    cache: "no-store",
+  });
+  if (!res.ok) {
+    throw new Error("Could not fetch camera snapshot.");
+  }
+  return res.blob();
+}
+
 export function createRobot(payload: {
   name: string;
   model: RobotModel;
@@ -105,6 +170,30 @@ export function updateRobot(
 
 export function fetchRobot(id: string): Promise<Robot> {
   return request<Robot>(`/robots/${id}`);
+}
+
+export function addRobotCamera(
+  robotId: string,
+  payload: {
+    device_id: string;
+    name: string;
+    width: number;
+    height: number;
+    fps: number;
+    serial_number?: string;
+    path?: string;
+    kind?: string;
+    index?: number | null;
+  }
+): Promise<Robot> {
+  return request<Robot>(`/robots/${robotId}/cameras`, {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function deleteRobotCamera(robotId: string, cameraId: string): Promise<Robot> {
+  return request<Robot>(`/robots/${robotId}/cameras/${cameraId}`, { method: "DELETE" });
 }
 
 export function startCalibration(id: string, override = false): Promise<CalibrationSession> {

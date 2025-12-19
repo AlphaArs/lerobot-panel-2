@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import List, Optional
+from typing import List, Optional, Literal
 
 from pydantic import BaseModel, Field
 
@@ -55,6 +55,7 @@ class Robot(RobotBase):
     status: str = Field(default="offline", description="online if COM is present")
     has_calibration: bool = False
     calibration: Optional[Calibration] = None
+    cameras: List["RobotCamera"] = Field(default_factory=list)
     last_seen: Optional[datetime] = None
 
 
@@ -79,3 +80,57 @@ class CalibrationSession(BaseModel):
     dry_run: bool = False
     return_code: Optional[int] = None
     ranges: List[dict] = Field(default_factory=list)
+
+
+class CameraMode(BaseModel):
+    width: int
+    height: int
+    fps: float
+
+
+class CameraDevice(BaseModel):
+    id: str
+    label: str
+    kind: Literal["opencv", "realsense"]
+    index: Optional[int] = None
+    path: Optional[str] = None
+    serial_number: Optional[str] = None
+    vendor_id: Optional[str] = None
+    product_id: Optional[str] = None
+    suggested: Optional[CameraMode] = None
+
+
+class CameraProbe(BaseModel):
+    device: CameraDevice
+    modes: List[CameraMode] = Field(default_factory=list)
+    suggested: Optional[CameraMode] = None
+
+
+class RobotCamera(BaseModel):
+    id: str
+    name: str
+    device_id: str
+    kind: Literal["opencv", "realsense"]
+    path: Optional[str] = None
+    serial_number: Optional[str] = None
+    width: int
+    height: int
+    fps: float
+    index: Optional[int] = None
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+
+
+class CameraCreate(BaseModel):
+    device_id: str
+    name: str
+    width: int
+    height: int
+    fps: float
+    serial_number: Optional[str] = None
+    path: Optional[str] = None
+    kind: Optional[str] = None
+    index: Optional[int] = None
+
+
+Robot.model_rebuild()
+CalibrationSession.model_rebuild()

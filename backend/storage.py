@@ -1,15 +1,15 @@
 from __future__ import annotations
 
 import json
-import threading
-import uuid
-from datetime import datetime
 import os
 from pathlib import Path
 import shutil
+import threading
+import uuid
+from datetime import datetime
 from typing import Dict, List, Optional
 
-from .models import Robot, RobotCreate, SUPPORTED_MODELS
+from .models import Robot, RobotCamera, RobotCreate, SUPPORTED_MODELS
 
 DATA_PATH = Path(__file__).resolve().parent.parent / "data" / "robots.json"
 CALIB_ROOT = Path(
@@ -44,6 +44,22 @@ def _parse_datetime(value: Optional[str]) -> Optional[datetime]:
         return None
 
 
+def _clean_camera_entry(item: Dict) -> Dict:
+    return {
+        "id": item.get("id"),
+        "name": item.get("name"),
+        "device_id": item.get("device_id"),
+        "kind": item.get("kind"),
+        "path": item.get("path"),
+        "serial_number": item.get("serial_number"),
+        "width": item.get("width"),
+        "height": item.get("height"),
+        "fps": item.get("fps"),
+        "index": item.get("index"),
+        "created_at": item.get("created_at"),
+    }
+
+
 class RobotStore:
     def __init__(self, path: Path = DATA_PATH):
         self.path = path
@@ -59,6 +75,11 @@ class RobotStore:
             "role": item.get("role"),
             "com_port": item.get("com_port"),
             "last_seen": item.get("last_seen"),
+            "cameras": [
+                _clean_camera_entry(cam)
+                for cam in item.get("cameras", [])
+                if isinstance(cam, dict)
+            ],
         }
 
     def _load(self) -> Dict:
@@ -158,7 +179,23 @@ class RobotStore:
             com_port=data["com_port"],
             has_calibration=calib_path.is_file(),
             calibration=None,
+            cameras=[self._to_camera(c) for c in data.get("cameras", []) if c],
             last_seen=_parse_datetime(data.get("last_seen")),
+        )
+
+    def _to_camera(self, data: Dict) -> RobotCamera:
+        return RobotCamera(
+            id=data.get("id"),
+            name=data.get("name", "Camera"),
+            device_id=data.get("device_id") or data.get("path") or data.get("serial_number") or data.get("id"),
+            kind=data.get("kind") or "opencv",
+            path=data.get("path"),
+            serial_number=data.get("serial_number"),
+            width=int(data.get("width") or 0),
+            height=int(data.get("height") or 0),
+            fps=float(data.get("fps") or 0),
+            index=data.get("index"),
+            created_at=_parse_datetime(data.get("created_at")) or datetime.utcnow(),
         )
 
     def update(self, robot_id: str, changes: Dict[str, str]) -> Optional[Robot]:
@@ -178,6 +215,40 @@ class RobotStore:
         if prior and updated_snapshot:
             self._maybe_rename_calibration(prior, updated_snapshot)
             return self._to_robot(updated_snapshot)
+        return None
+
+    def add_camera(self, robot_id: str, camera: RobotCamera) -> Optional[Robot]:
+        record = _clean_camera_entry(camera.model_dump())
+        if not record.get("id"):
+            record["id"] = str(uuid.uuid4())
+        with self._lock:
+            for item in self._data.get("robots", []):
+                if item.get("id") == robot_id:
+                    cameras = item.setdefault("cameras", [])
+                    # Avoid duplicates by device_id + name combo
+                    for existing in cameras:
+                        if (
+                            existing.get("device_id") == record.get("device_id")
+                            and existing.get("name") == record.get("name")
+                        ):
+                            existing.update(record)
+                            break
+                    else:
+                        cameras.append(record)
+                    self._save()
+                    return self._to_robot(item)
+        return None
+
+    def remove_camera(self, robot_id: str, camera_id: str) -> Optional[Robot]:
+        with self._lock:
+            for item in self._data.get("robots", []):
+                if item.get("id") != robot_id:
+                    continue
+                cameras = item.get("cameras", []) or []
+                new_list = [cam for cam in cameras if cam.get("id") != camera_id]
+                item["cameras"] = new_list
+                self._save()
+                return self._to_robot(item)
         return None
 
     def _remove_calibration_file(self, data: Dict) -> bool:

@@ -1,3 +1,35 @@
+add check for bot not being set in mid range (vbcs of min max values at the end) got removed or is not working, fix that
+
+
+---
+
+Make it not possible to add twice the same com device as different robots.
+
+---
+
+next when we execute the teleopt with cameras, we should use the id's of the cams we get when we exiecute the command in register.py since we know the path, we can see what Id is bound to it.
+
+---
+x
+I would like to be able on a specific bot page, to add cameras, So just a simple camera section on the bot. Where I can click on a Add Camera button. If the button is pressed, it should open an add camera page. On there I should see a dropdown, where all detected cameras are listed, it should constantly show all cameras plugged in. And when a camera gets plugged out it should be removed from the list and added when plugged in. I would like the backend to sent those infos to the frontend. So yeah. When a cam is selected, Ideally I would like to get a preview of the cam. So the user is sure this is the correct one. he also should have a field where he can name the camera. below we have a field for FPS this should be prefilled with what the camera is able to do and what is the best fit and this should be possible to edit,to set a different value with the obvious ranges that are possible for that camera, else the user sees a message telling this is not possible. Bellow twe fields also prefilled with the width and hight of the image. those can also be changed. 
+
+when those fields are filled in the use can press on the Save button. This will save the camera with all set configs. and IDeally it would be nice to save the camera with the path. To identify the camera in all cases even if unplugged and replugged.
+
+There is one exception, if the camera is a Intel Realsense camera, it should keep the serial number, this can be found with 
+import pyrealsense2 as rs
+
+ctx = rs.context()
+devices = ctx.query_devices()
+
+for dev in devices:
+    print("Name:", dev.get_info(rs.camera_info.name))
+    print("Serial Number:", dev.get_info(rs.camera_info.serial_number))
+
+
+but just to be sure, do show a field serial number, with this the serialnumber filled in, so the use can check.
+
+
+---
 the buttons should be a solid color when hovered, and not contantly. When not hovered it should be an outline like it was before 
 
 

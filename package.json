@@ -9,7 +9,7 @@
     "install:backend": "python -m pip install -r backend/requirements.with-lerobot.txt",
     "postinstall": "npm run install:all",
     "dev": "concurrently -k \"npm:dev:backend\" \"npm:dev:frontend\" \"npm:dev:electron\"",
-    "dev:backend": "python -m uvicorn backend.main:app --reload --host 0.0.0.0 --port 8000",
+    "dev:backend": "python -m uvicorn backend.main:app --reload --host 127.0.0.1 --port 8000",
     "dev:frontend": "npm run dev --prefix frontend",
     "dev:electron": "wait-on http://localhost:3000 && npm run dev --prefix electron"
   },

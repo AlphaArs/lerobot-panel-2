@@ -4,13 +4,15 @@ import asyncio
 import importlib.util
 import json
 import os
+import uuid
 from datetime import datetime
 from typing import List
 
-from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, Response, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 
 from .calibration_manager import CalibrationManager
+from .camera_monitor import CameraMonitor
 from .commands import _find_repo_root
 from .device_monitor import DeviceMonitor
 from .models import (
@@ -18,10 +20,15 @@ from .models import (
     CalibrationSession,
     CalibrationStart,
     CalibrationInput,
+    CameraCreate,
+    CameraDevice,
+    CameraProbe,
+    CameraMode,
     Robot,
     RobotCreate,
     RobotUpdate,
     SUPPORTED_MODELS,
+    RobotCamera,
     TeleopRequest,
 )
 from .storage import RobotStore
@@ -39,6 +46,7 @@ app.add_middleware(
 
 store = RobotStore()
 monitor = DeviceMonitor()
+camera_monitor = CameraMonitor()
 calibration_manager = CalibrationManager()
 teleop_manager = TeleopManager()
 
@@ -46,6 +54,7 @@ teleop_manager = TeleopManager()
 @app.on_event("startup")
 async def _startup() -> None:
     monitor.start()
+    camera_monitor.start()
 
 
 def _allow_real_commands() -> bool:
@@ -88,6 +97,14 @@ def _require_robot(robot_id: str) -> Robot:
     return robot
 
 
+def _serialize_camera_device(device) -> CameraDevice:
+    return CameraDevice.model_validate(device.to_dict())
+
+
+def _serialize_camera_mode(mode) -> CameraMode:
+    return CameraMode.model_validate(mode.to_dict())
+
+
 @app.get("/health")
 def health() -> dict:
     return {"status": "ok"}
@@ -96,6 +113,36 @@ def health() -> dict:
 @app.get("/ports")
 def list_ports() -> dict:
     return {"ports": monitor.snapshot()}
+
+
+@app.get("/cameras", response_model=List[CameraDevice])
+def list_cameras() -> List[CameraDevice]:
+    return [_serialize_camera_device(dev) for dev in camera_monitor.snapshot()]
+
+
+@app.get("/cameras/{device_id}/probe", response_model=CameraProbe)
+def probe_camera(device_id: str) -> CameraProbe:
+    device, modes, suggested = camera_monitor.probe_modes(device_id)
+    if not device:
+        raise HTTPException(status_code=404, detail="Camera not found")
+    return CameraProbe(
+        device=_serialize_camera_device(device),
+        modes=[_serialize_camera_mode(m) for m in modes],
+        suggested=_serialize_camera_mode(suggested) if suggested else None,
+    )
+
+
+@app.get("/cameras/{device_id}/snapshot")
+def camera_snapshot(
+    device_id: str,
+    width: int | None = None,
+    height: int | None = None,
+    fps: float | None = None,
+) -> Response:
+    data = camera_monitor.capture_frame(device_id, width=width, height=height, fps=fps)
+    if not data:
+        raise HTTPException(status_code=404, detail="Could not capture preview from this camera.")
+    return Response(content=data, media_type="image/jpeg")
 
 
 @app.get("/robots", response_model=List[Robot])
@@ -146,6 +193,58 @@ def update_robot(robot_id: str, payload: RobotUpdate) -> Robot:
 def get_robot(robot_id: str) -> Robot:
     robot = _require_robot(robot_id)
     return _with_status(robot)
+
+
+@app.get("/robots/{robot_id}/cameras", response_model=List[RobotCamera])
+def get_robot_cameras(robot_id: str) -> List[RobotCamera]:
+    robot = _require_robot(robot_id)
+    return robot.cameras or []
+
+
+@app.post("/robots/{robot_id}/cameras", response_model=Robot)
+def add_robot_camera(robot_id: str, payload: CameraCreate) -> Robot:
+    robot = _require_robot(robot_id)
+    name = (payload.name or "").strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="Camera name cannot be empty.")
+
+    device = camera_monitor.get(payload.device_id)
+    _, modes, _ = camera_monitor.probe_modes(payload.device_id)
+    if modes:
+        supported = any(
+            m.width == payload.width and m.height == payload.height and abs(m.fps - payload.fps) <= 1.5
+            for m in modes
+        )
+        if not supported:
+            raise HTTPException(
+                status_code=400,
+                detail="This resolution/FPS is not reported as supported by the selected camera.",
+            )
+
+    serial_number = payload.serial_number or (device.serial_number if device else None)
+    path = payload.path or (device.path if device else None)
+    kind = (payload.kind or (device.kind if device else "opencv")).lower()
+    camera = RobotCamera(
+        id=str(uuid.uuid4()),
+        name=name,
+        device_id=payload.device_id,
+        kind=kind if kind in ("opencv", "realsense") else "opencv",
+        path=path,
+        serial_number=serial_number,
+        width=payload.width,
+        height=payload.height,
+        fps=payload.fps,
+        index=payload.index if payload.index is not None else (device.index if device else None),
+    )
+    updated = store.add_camera(robot_id, camera)
+    return _with_status(updated or robot)
+
+
+@app.delete("/robots/{robot_id}/cameras/{camera_id}", response_model=Robot)
+def delete_robot_camera(robot_id: str, camera_id: str) -> Robot:
+    robot = _require_robot(robot_id)
+    updated = store.remove_camera(robot_id, camera_id)
+    return _with_status(updated or robot)
 
 
 @app.delete("/robots/{robot_id}")
@@ -313,6 +412,22 @@ async def robots_stream(websocket: WebSocket) -> None:
                 await websocket.send_json(payload)
                 last_payload = serialized
             await asyncio.sleep(2)
+    except WebSocketDisconnect:
+        return
+
+
+@app.websocket("/ws/cameras")
+async def cameras_stream(websocket: WebSocket) -> None:
+    await websocket.accept()
+    last_payload: str | None = None
+    try:
+        while True:
+            devices = [_serialize_camera_device(d).model_dump(mode="json") for d in camera_monitor.snapshot()]
+            serialized = json.dumps(devices, sort_keys=True)
+            if serialized != last_payload:
+                await websocket.send_json({"type": "camera_devices", "devices": devices})
+                last_payload = serialized
+            await asyncio.sleep(1.0)
     except WebSocketDisconnect:
         return
 
