@@ -249,6 +249,14 @@ export default function RobotDetailPage() {
         (!!cam.serial_number && dev.serial_number === cam.serial_number) ||
         (!!cam.path && dev.path === cam.path)
     );
+  const labelCounts = useMemo(() => {
+    const counts: Record<string, number> = {};
+    cameraDevices.forEach((dev) => {
+      const key = dev.label || dev.id;
+      counts[key] = (counts[key] || 0) + 1;
+    });
+    return counts;
+  }, [cameraDevices]);
   const numericWidth = Number(cameraForm.width) || 0;
   const numericHeight = Number(cameraForm.height) || 0;
   const numericFps = Number(cameraForm.fps) || 0;
@@ -752,7 +760,11 @@ export default function RobotDetailPage() {
                   <option value="">Pick a camera</option>
                   {cameraDevices.map((dev) => (
                     <option key={dev.id} value={dev.id}>
-                      {dev.label} {dev.serial_number ? `(SN ${dev.serial_number})` : ""} [{dev.kind}]
+                      {dev.label}
+                      {labelCounts[dev.label] > 1 ? ` • ${dev.id.slice(-6)}` : ""}
+                      {dev.serial_number ? ` (SN ${dev.serial_number})` : ""}
+                      {" "}
+                      [{dev.kind}]
                     </option>
                   ))}
                 </select>

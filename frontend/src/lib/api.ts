@@ -19,6 +19,7 @@ export type CameraDevice = {
   id: string;
   label: string;
   kind: "opencv" | "realsense";
+  backend?: string | null;
   index?: number | null;
   path?: string | null;
   serial_number?: string | null;

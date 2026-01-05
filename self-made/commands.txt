@@ -55,5 +55,42 @@ lerobot-calibrate --teleop.type=so101_leader --teleop.port=COM10 --teleop.id=lea
 lerobot-teleoperate --robot.type=so101_follower --robot.port=COM13 --robot.id=follower_arm --teleop.type=so101_leader --teleop.port=COM14 --teleop.id=leader_arm
 
 
+avec cam
+
+lerobot-teleoperate \
+    --robot.type=koch_follower \
+    --robot.port=/dev/tty.usbmodem58760431541 \
+    --robot.id=my_awesome_follower_arm \
+    --robot.cameras="{ front: {type: opencv, index_or_path: 0, width: 1920, height: 1080, fps: 30}}" \
+    --teleop.type=koch_leader \
+    --teleop.port=/dev/tty.usbmodem58760431551 \
+    --teleop.id=my_awesome_leader_arm \
+    --display_data=true
+
+
+
+cam normal
+lerobot-teleoperate --robot.type=so101_follower --robot.port=COM13 --robot.id="Follower upstairs"  --teleop.type=so101_leader --teleop.port=COM14 --teleop.id="Leader Upstairs" --robot.cameras="{ front: {type: opencv, index_or_path: 0, backend: DSHOW, fourcc: MJPG, width: 1920, height: 1080, fps: 30}, back: {type: opencv, index_or_path: 1, backend: DSHOW, fourcc: MJPG, width: 1920, height: 1080, fps: 30} }" --display_data=true
+
+
+
+cam normal
+lerobot-teleoperate --robot.type=so101_follower --robot.port=COM13 --robot.id="Follower upstairs" --teleop.type=so101_leader --teleop.port=COM14 --teleop.id="Leader Upstairs" --robot.cameras="{ front: {type: opencv, index_or_path: 0, width: 1920, height: 1080, fps: 30}, back: {type: opencv, index_or_path: 1, width: 1920, height: 1080, fps: 30}}" --display_data=true
+
+
+cam low fps 
+lerobot-teleoperate --robot.type=so101_follower --robot.port=COM13 --robot.id="Follower upstairs" --teleop.type=so101_leader --teleop.port=COM14 --teleop.id="Leader Upstairs" --robot.cameras="{ front: {type: opencv, index_or_path: 0, width: 1920, height: 1080, fps: 4}, back: {type: opencv, index_or_path: 1, width: 1920, height: 1080, fps: 4}}" --display_data=true
+
+
+cam mmpegj jsp si c'est possible
+lerobot-teleoperate --robot.type=so101_follower --robot.port=COM13 --robot.id="Follower upstairs" --teleop.type=so101_leader --teleop.port=COM14 --teleop.id="Leader Upstairs" --robot.cameras="{ front: {type: opencv, index_or_path: 0, width: 1920, height: 1080, fps: 30, fourcc: \"MJPG\"}, back: {type: opencv, index_or_path: 1, width: 1920, height: 1080, fps: 30, fourcc: \"MJPG\"}}" --display_data=true
+
 
 lerobot-find-cameras opencv
+
+
+
+
+
+fonctionne
+ lerobot-teleoperate --robot.type=so101_follower --robot.port=COM13 --robot.id="Follower upstairs"  --teleop.type=so101_leader --teleop.port=COM14 --teleop.id="Leader Upstairs" --robot.cameras="{front: {type: opencv, index_or_path: 1, width: 1280, height: 720, fps: 20, fourcc: MJPG}, back: {type: opencv, index_or_path: 3, width: 1280, height: 720, fps: 20, fourcc: MJPG}, over: {type: opencv, index_or_path: 0, width: 1280, height: 720, fps: 20, fourcc: MJPG}}" --display_data=true

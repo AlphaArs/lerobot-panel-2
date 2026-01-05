@@ -24,7 +24,16 @@
       "model": "so101",
       "role": "follower",
       "com_port": "COM13",
-      "last_seen": "2025-12-19T15:54:22.722975",
+      "last_seen": "2026-01-05T11:38:47.019757",
+      "cameras": []
+    },
+    {
+      "id": "2c3a767f-2c35-40db-b7e0-d4ceedf7a6c8",
+      "name": "Leader Upstairs",
+      "model": "so101",
+      "role": "leader",
+      "com_port": "COM14",
+      "last_seen": "2026-01-05T11:38:47.020256",
       "cameras": []
     }
   ]

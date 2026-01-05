@@ -92,6 +92,7 @@ class CameraDevice(BaseModel):
     id: str
     label: str
     kind: Literal["opencv", "realsense"]
+    backend: Optional[str] = None
     index: Optional[int] = None
     path: Optional[str] = None
     serial_number: Optional[str] = None

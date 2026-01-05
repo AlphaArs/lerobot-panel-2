@@ -180,51 +180,84 @@ class OpenCVCamera(Camera):
         logger.info(f"{self} connected.")
 
     def _configure_capture_settings(self) -> None:
-        """
-        Applies the specified FOURCC, FPS, width, and height settings to the connected camera.
-
-        This method attempts to set the camera properties via OpenCV. It checks if
-        the camera successfully applied the settings and raises an error if not.
-        FOURCC is set first (if specified) as it can affect the available FPS and resolution options.
-
-        Args:
-            fourcc: The desired FOURCC code (e.g., "MJPG", "YUYV"). If None, auto-detect.
-            fps: The desired frames per second. If None, the setting is skipped.
-            width: The desired capture width. If None, the setting is skipped.
-            height: The desired capture height. If None, the setting is skipped.
-
-        Raises:
-            RuntimeError: If the camera fails to set any of the specified properties
-                          to the requested value.
-            DeviceNotConnectedError: If the camera is not connected when attempting
-                                     to configure settings.
-        """
-        if not self.is_connected:
-            raise DeviceNotConnectedError(f"Cannot configure settings for {self} as it is not connected.")
-
-        # Set FOURCC first (if specified) as it can affect available FPS/resolution options
-        if self.config.fourcc is not None:
-            self._validate_fourcc()
-        if self.videocapture is None:
-            raise DeviceNotConnectedError(f"{self} videocapture is not initialized")
-
-        default_width = int(round(self.videocapture.get(cv2.CAP_PROP_FRAME_WIDTH)))
-        default_height = int(round(self.videocapture.get(cv2.CAP_PROP_FRAME_HEIGHT)))
-
-        if self.width is None or self.height is None:
-            self.width, self.height = default_width, default_height
-            self.capture_width, self.capture_height = default_width, default_height
-            if self.rotation in [cv2.ROTATE_90_CLOCKWISE, cv2.ROTATE_90_COUNTERCLOCKWISE]:
-                self.width, self.height = default_height, default_width
-                self.capture_width, self.capture_height = default_width, default_height
-        else:
-            self._validate_width_and_height()
-
-        if self.fps is None:
-            self.fps = self.videocapture.get(cv2.CAP_PROP_FPS)
-        else:
-            self._validate_fps()
-
+       """
+       Apply width/height/fps/fourcc to the connected camera.
+    
+       IMPORTANT (Windows + cheap UVC cams):
+       - Set width/height/fps FIRST
+       - Set FOURCC LAST (MJPG), otherwise it may silently fall back to YUY2 or stall
+       - Do not hard-fail if CAP_PROP_FPS readback doesn't match; it's often unreliable.
+       """
+       if not self.is_connected:
+           raise DeviceNotConnectedError(f"Cannot configure settings for {self} as it is not connected.")
+       if self.videocapture is None:
+           raise DeviceNotConnectedError(f"{self} videocapture is not initialized")
+    
+       # Read defaults
+       default_width = int(round(self.videocapture.get(cv2.CAP_PROP_FRAME_WIDTH)))
+       default_height = int(round(self.videocapture.get(cv2.CAP_PROP_FRAME_HEIGHT)))
+    
+       # Decide requested width/height
+       if self.width is None or self.height is None:
+           self.width, self.height = default_width, default_height
+    
+       # Compute capture_width/capture_height (pre-rotation)
+       self.capture_width, self.capture_height = self.width, self.height
+       if self.rotation in [cv2.ROTATE_90_CLOCKWISE, cv2.ROTATE_90_COUNTERCLOCKWISE]:
+           # OpenCV gives frames in rotated orientation later; capture is swapped
+           self.capture_width, self.capture_height = self.height, self.width
+    
+       # Decide requested FPS
+       if self.fps is None:
+           # CAP_PROP_FPS often returns 0 on Windows; default to 30 if unknown
+           fps_read = float(self.videocapture.get(cv2.CAP_PROP_FPS) or 0.0)
+           self.fps = fps_read if fps_read > 0.1 else 30.0
+    
+       # ---- APPLY SETTINGS (order matters) ----
+       # Latency help (may be ignored depending on backend)
+       try:
+           self.videocapture.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+       except Exception:
+           pass
+        
+       # 1) width/height first
+       self.videocapture.set(cv2.CAP_PROP_FRAME_WIDTH, float(self.capture_width))
+       self.videocapture.set(cv2.CAP_PROP_FRAME_HEIGHT, float(self.capture_height))
+    
+       # 2) fps next
+       try:
+           self.videocapture.set(cv2.CAP_PROP_FPS, float(self.fps))
+       except Exception:
+           pass
+        
+       # 3) FOURCC LAST (critical for your cameras)
+       if self.config.fourcc:
+           try:
+               self.videocapture.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*self.config.fourcc))
+           except Exception:
+               pass
+            
+       # ---- LOG what we actually got ----
+       def _fourcc_to_str(v):
+           i = int(v)
+           return "".join([chr((i >> (8 * k)) & 0xFF) for k in range(4)])
+    
+       got_w = int(round(self.videocapture.get(cv2.CAP_PROP_FRAME_WIDTH)))
+       got_h = int(round(self.videocapture.get(cv2.CAP_PROP_FRAME_HEIGHT)))
+       got_fps = float(self.videocapture.get(cv2.CAP_PROP_FPS) or 0.0)
+       got_fourcc = _fourcc_to_str(self.videocapture.get(cv2.CAP_PROP_FOURCC))
+    
+       logger.info(
+           f"{self} negotiated: {got_w}x{got_h} {got_fourcc} rep_fps={got_fps:.1f} (requested {self.capture_width}x{self.capture_height}@{self.fps} {self.config.fourcc})"
+       )
+    
+       # Warm up a few frames right after configuration to "lock in" streaming
+       for _ in range(10):
+           try:
+               self.videocapture.read()
+           except Exception:
+               break
+            
     def _validate_fps(self) -> None:
         """Validates and sets the camera's frames per second (FPS)."""
 
@@ -470,12 +503,12 @@ class OpenCVCamera(Camera):
             self.stop_event.set()
 
         if self.thread is not None and self.thread.is_alive():
-            self.thread.join(timeout=2.0)
+            self.thread.join(timeout=4.0)
 
         self.thread = None
         self.stop_event = None
 
-    def async_read(self, timeout_ms: float = 200) -> NDArray[Any]:
+    def async_read(self, timeout_ms: float = 1000) -> NDArray[Any]:
         """
         Reads the latest available frame asynchronously.
 
