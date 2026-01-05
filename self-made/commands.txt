@@ -94,3 +94,12 @@ lerobot-find-cameras opencv
 
 fonctionne
  lerobot-teleoperate --robot.type=so101_follower --robot.port=COM13 --robot.id="Follower upstairs"  --teleop.type=so101_leader --teleop.port=COM14 --teleop.id="Leader Upstairs" --robot.cameras="{front: {type: opencv, index_or_path: 1, width: 1280, height: 720, fps: 20, fourcc: MJPG}, back: {type: opencv, index_or_path: 3, width: 1280, height: 720, fps: 20, fourcc: MJPG}, over: {type: opencv, index_or_path: 0, width: 1280, height: 720, fps: 20, fourcc: MJPG}}" --display_data=true
+
+
+
+limit program to 20fps 3x cams 
+ lerobot-teleoperate --robot.type=so101_follower --robot.port=COM13 --robot.id="Follower upstairs"  --teleop.type=so101_leader --teleop.port=COM14 --teleop.id="Leader Upstairs" --fps=20 --robot.cameras="{front: {type: opencv, index_or_path: 1, width: 1280, height: 720, fps: 20, fourcc: MJPG}, back: {type: opencv, index_or_path: 3, width: 1280, height: 720, fps: 20, fourcc: MJPG}, over: {type: opencv, index_or_path: 0, width: 1280, height: 720, fps: 20, fourcc: MJPG}}" --display_data=true
+
+
+ limit program to 20fps 2x cams 
+ lerobot-teleoperate --robot.type=so101_follower --robot.port=COM13 --robot.id="Follower upstairs"  --teleop.type=so101_leader --teleop.port=COM14 --teleop.id="Leader Upstairs" --fps=20 --robot.cameras="{front: {type: opencv, index_or_path: 1, width: 1280, height: 720, fps: 20, fourcc: MJPG}, over: {type: opencv, index_or_path: 0, width: 1280, height: 720, fps: 20, fourcc: MJPG}}" --display_data=true

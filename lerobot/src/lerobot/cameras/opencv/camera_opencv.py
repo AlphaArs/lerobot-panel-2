@@ -160,8 +160,26 @@ class OpenCVCamera(Camera):
         # blocking in multi-threaded applications, especially during data collection.
         cv2.setNumThreads(1)
 
-        self.videocapture = cv2.VideoCapture(self.index_or_path,  cv2.CAP_DSHOW)
-
+        # Try DSHOW first (best chance for MJPG), then fall back.
+        backends = [cv2.CAP_DSHOW, cv2.CAP_MSMF, cv2.CAP_ANY]
+        last_err = None
+        
+        self.videocapture = None
+        for be in backends:
+            cap = cv2.VideoCapture(self.index_or_path, be)
+            if cap is not None and cap.isOpened():
+                self.videocapture = cap
+                break
+            try:
+                cap.release()
+            except Exception:
+                pass
+            
+        if self.videocapture is None or not self.videocapture.isOpened():
+            raise ConnectionError(
+                f"Failed to open {self}. Run `lerobot-find-cameras opencv` to find available cameras."
+            )
+        
         if not self.videocapture.isOpened():
             self.videocapture.release()
             self.videocapture = None
@@ -182,7 +200,7 @@ class OpenCVCamera(Camera):
     def _configure_capture_settings(self) -> None:
        """
        Apply width/height/fps/fourcc to the connected camera.
-    
+
        IMPORTANT (Windows + cheap UVC cams):
        - Set width/height/fps FIRST
        - Set FOURCC LAST (MJPG), otherwise it may silently fall back to YUY2 or stall
@@ -192,72 +210,72 @@ class OpenCVCamera(Camera):
            raise DeviceNotConnectedError(f"Cannot configure settings for {self} as it is not connected.")
        if self.videocapture is None:
            raise DeviceNotConnectedError(f"{self} videocapture is not initialized")
-    
+
        # Read defaults
        default_width = int(round(self.videocapture.get(cv2.CAP_PROP_FRAME_WIDTH)))
        default_height = int(round(self.videocapture.get(cv2.CAP_PROP_FRAME_HEIGHT)))
-    
+
        # Decide requested width/height
        if self.width is None or self.height is None:
            self.width, self.height = default_width, default_height
-    
+
        # Compute capture_width/capture_height (pre-rotation)
        self.capture_width, self.capture_height = self.width, self.height
        if self.rotation in [cv2.ROTATE_90_CLOCKWISE, cv2.ROTATE_90_COUNTERCLOCKWISE]:
            # OpenCV gives frames in rotated orientation later; capture is swapped
            self.capture_width, self.capture_height = self.height, self.width
-    
+
        # Decide requested FPS
        if self.fps is None:
            # CAP_PROP_FPS often returns 0 on Windows; default to 30 if unknown
            fps_read = float(self.videocapture.get(cv2.CAP_PROP_FPS) or 0.0)
            self.fps = fps_read if fps_read > 0.1 else 30.0
-    
+
        # ---- APPLY SETTINGS (order matters) ----
        # Latency help (may be ignored depending on backend)
        try:
            self.videocapture.set(cv2.CAP_PROP_BUFFERSIZE, 1)
        except Exception:
            pass
-        
+
        # 1) width/height first
        self.videocapture.set(cv2.CAP_PROP_FRAME_WIDTH, float(self.capture_width))
        self.videocapture.set(cv2.CAP_PROP_FRAME_HEIGHT, float(self.capture_height))
-    
+
        # 2) fps next
        try:
            self.videocapture.set(cv2.CAP_PROP_FPS, float(self.fps))
        except Exception:
            pass
-        
+
        # 3) FOURCC LAST (critical for your cameras)
        if self.config.fourcc:
            try:
                self.videocapture.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*self.config.fourcc))
            except Exception:
                pass
-            
+
        # ---- LOG what we actually got ----
        def _fourcc_to_str(v):
            i = int(v)
            return "".join([chr((i >> (8 * k)) & 0xFF) for k in range(4)])
-    
+
        got_w = int(round(self.videocapture.get(cv2.CAP_PROP_FRAME_WIDTH)))
        got_h = int(round(self.videocapture.get(cv2.CAP_PROP_FRAME_HEIGHT)))
        got_fps = float(self.videocapture.get(cv2.CAP_PROP_FPS) or 0.0)
        got_fourcc = _fourcc_to_str(self.videocapture.get(cv2.CAP_PROP_FOURCC))
-    
+
        logger.info(
            f"{self} negotiated: {got_w}x{got_h} {got_fourcc} rep_fps={got_fps:.1f} (requested {self.capture_width}x{self.capture_height}@{self.fps} {self.config.fourcc})"
        )
-    
+
        # Warm up a few frames right after configuration to "lock in" streaming
        for _ in range(10):
            try:
                self.videocapture.read()
            except Exception:
                break
-            
+
     def _validate_fps(self) -> None:
         """Validates and sets the camera's frames per second (FPS)."""
 
