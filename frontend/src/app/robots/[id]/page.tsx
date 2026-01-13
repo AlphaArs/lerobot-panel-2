@@ -780,25 +780,26 @@ export default function RobotDetailPage() {
             </Button>
           </div>
           {robot?.cameras?.length ? (
-            <div className="flex flex-col gap-2">
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
               {robot.cameras.map((cam) => {
                 const online = cameraIsOnline(cam);
                 return (
                   <div
                     key={cam.id}
-                    className="list-row items-center gap-3"
+                    className="list-row w-full max-w-sm items-start gap-3"
                   >
-                    <div className="min-w-[180px] space-y-1">
-                      <div className="font-semibold">{cam.name}</div>
-                      <div className="text-xs text-muted break-all">{cam.device_id}</div>
+                    <div className="flex flex-1 flex-col gap-1">
+                      <div className="flex flex-wrap items-center gap-3">
+                        <div className="font-semibold">{cam.name}</div>
+                        <Tag className="capitalize">{cam.kind}</Tag>
+                        <Tag className={`capitalize ${online ? "online" : "offline"}`}>
+                          {online ? "online" : "offline"}
+                        </Tag>
+                      </div>
+                      <span className="text-sm text-muted">
+                        {cam.width}x{cam.height} @ {cam.fps} FPS
+                      </span>
                     </div>
-                    <Tag className={`capitalize ${online ? "online" : "offline"}`}>{online ? "online" : "offline"}</Tag>
-                    <Tag className="capitalize">{cam.kind}</Tag>
-                    <span className="text-sm text-muted">
-                      {cam.width}x{cam.height} @ {cam.fps} FPS
-                    </span>
-                    {cam.serial_number && <Tag>SN {cam.serial_number}</Tag>}
-                    <Spacer />
                     <Button variant="ghost" onClick={() => void handleRemoveCamera(cam.id)}>
                       Remove
                     </Button>

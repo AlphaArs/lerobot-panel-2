@@ -24,7 +24,7 @@
       "model": "so101",
       "role": "follower",
       "com_port": "COM13",
-      "last_seen": "2026-01-13T14:36:28.565670",
+      "last_seen": "2026-01-13T14:52:58.425229",
       "cameras": [
         {
           "id": "cc5b0b07-cc07-4c79-9f84-57700f61cebf",
@@ -60,7 +60,7 @@
       "model": "so101",
       "role": "leader",
       "com_port": "COM14",
-      "last_seen": "2026-01-13T14:36:28.566173",
+      "last_seen": "2026-01-13T14:52:58.426230",
       "cameras": []
     }
   ]
