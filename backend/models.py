@@ -98,6 +98,7 @@ class CameraDevice(BaseModel):
     serial_number: Optional[str] = None
     vendor_id: Optional[str] = None
     product_id: Optional[str] = None
+    container_id: Optional[str] = None
     suggested: Optional[CameraMode] = None
 
 
@@ -114,6 +115,7 @@ class RobotCamera(BaseModel):
     kind: Literal["opencv", "realsense"]
     path: Optional[str] = None
     serial_number: Optional[str] = None
+    container_id: Optional[str] = None
     width: int
     height: int
     fps: float
@@ -131,6 +133,7 @@ class CameraCreate(BaseModel):
     path: Optional[str] = None
     kind: Optional[str] = None
     index: Optional[int] = None
+    container_id: Optional[str] = None
 
 
 Robot.model_rebuild()

@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import functools
+import os
 import re
+import subprocess
 import threading
 import time
 from dataclasses import asdict, dataclass
@@ -18,6 +21,8 @@ MIN_REPORTED_FPS = 15.0
 FPS_PRESETS = [30.0, 25.0, 15.0]
 FPS_MARGIN = 3.0
 SIGNATURE_SIZE = (32, 18)
+GUID_RE = re.compile(r"^\{?[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\}?$")
+USB_PATH_RE = re.compile(r"(?:^|\\\\\\?\\)usb#([^#]+)#([^#]+)#", re.IGNORECASE)
 
 
 def _import_cv2():
@@ -29,6 +34,62 @@ def _import_cv2():
             pass
 
         return cv2
+    except Exception:
+        return None
+
+
+def _is_windows() -> bool:
+    return os.name == "nt"
+
+
+def _run_powershell(cmd: str) -> str:
+    return subprocess.check_output(
+        ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", cmd],
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+    ).strip()
+
+
+def _dshow_path_to_instance_id(path: str) -> str:
+    cleaned = (path or "").strip()
+    if not cleaned:
+        raise ValueError("Empty DirectShow path")
+
+    match = USB_PATH_RE.search(cleaned)
+    if not match:
+        match = re.search(r"usb#([^#]+)#([^#]+)#", cleaned, re.IGNORECASE)
+    if not match:
+        raise ValueError(f"Could not parse USB instance tokens from: {path}")
+
+    part1, part2 = match.group(1), match.group(2)
+    return f"USB\\{part1}\\{part2}".upper()
+
+
+def _container_id_from_instance_id(instance_id: str) -> str:
+    if not instance_id or instance_id.lower() == "none":
+        raise RuntimeError(f"Invalid InstanceId: {instance_id}")
+
+    ps = (
+        "(Get-ItemProperty -Path "
+        f"'HKLM:\\SYSTEM\\CurrentControlSet\\Enum\\{instance_id}' "
+        "-Name ContainerID).ContainerID"
+    )
+    out = _run_powershell(ps).strip()
+    if not out or not GUID_RE.match(out):
+        raise RuntimeError(f"ContainerID was not found or invalid for {instance_id}")
+    return out
+
+
+@functools.lru_cache(maxsize=32)
+def _container_id_from_path(path: str) -> Optional[str]:
+    if not _is_windows():
+        return None
+    if not path:
+        return None
+    try:
+        instance_id = _dshow_path_to_instance_id(path)
+        return _container_id_from_instance_id(instance_id)
     except Exception:
         return None
 
@@ -54,6 +115,7 @@ class CameraDevice:
     serial_number: Optional[str] = None
     vendor_id: Optional[str] = None
     product_id: Optional[str] = None
+    container_id: Optional[str] = None
     suggested: Optional[CameraMode] = None
 
     def to_dict(self) -> dict:
@@ -98,6 +160,19 @@ class CameraMonitor:
     def get(self, device_id: str) -> Optional[CameraDevice]:
         with self._lock:
             return self._devices.get(device_id)
+
+    def resolve_index_from_container_id(self, container_id: str) -> Optional[int]:
+        """
+        Best-effort lookup to translate a persisted container ID back to a live OpenCV index.
+        """
+        target = (container_id or "").strip().lower()
+        if not target:
+            return None
+        with self._lock:
+            for dev in self._devices.values():
+                if (dev.container_id or "").strip().lower() == target:
+                    return dev.index
+        return None
 
     def probe_modes(self, device_id: str) -> tuple[Optional[CameraDevice], List[CameraMode], Optional[CameraMode]]:
         device = self.get(device_id)
@@ -240,6 +315,8 @@ class CameraMonitor:
                 if capture_path:
                     seen_paths.add(capture_path.lower())
 
+                container_id = _container_id_from_path(capture_path or "")
+
                 raw_id = capture_path or str(cam.index)
                 device_id = f"opencv:{_slugify(str(raw_id))}"
                 suggested = self._suggest_from_default_props(cv2, cam.index)
@@ -255,6 +332,7 @@ class CameraMonitor:
                     serial_number=None,
                     vendor_id=str(cam.vid) if getattr(cam, "vid", None) else None,
                     product_id=str(cam.pid) if getattr(cam, "pid", None) else None,
+                    container_id=container_id,
                     suggested=suggested,
                 )
         except Exception:
@@ -573,7 +651,11 @@ class CameraMonitor:
                         and str(cam.pid or "").lower() == (device.product_id or "").lower()
                     )
                     path_match = (cam.path or "").lower() == (device.path or "").lower()
-                    if path_match:
+                    container_match = False
+                    if device.container_id:
+                        cid = _container_id_from_path(cam.path or "")
+                        container_match = cid and cid.lower() == (device.container_id or "").lower()
+                    if path_match or container_match:
                         path_index = cam.index
                         break
                     if vid_pid_match and matched_index is None:

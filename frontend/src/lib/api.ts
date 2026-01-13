@@ -25,6 +25,7 @@ export type CameraDevice = {
   serial_number?: string | null;
   vendor_id?: string | null;
   product_id?: string | null;
+   container_id?: string | null;
   suggested?: CameraMode | null;
 };
 
@@ -41,6 +42,7 @@ export type RobotCamera = {
   kind: "opencv" | "realsense";
   path?: string | null;
   serial_number?: string | null;
+  container_id?: string | null;
   width: number;
   height: number;
   fps: number;
@@ -185,6 +187,7 @@ export function addRobotCamera(
     path?: string;
     kind?: string;
     index?: number | null;
+    container_id?: string | null;
   }
 ): Promise<Robot> {
   return request<Robot>(`/robots/${robotId}/cameras`, {

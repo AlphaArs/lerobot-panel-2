@@ -209,20 +209,11 @@ def add_robot_camera(robot_id: str, payload: CameraCreate) -> Robot:
         raise HTTPException(status_code=400, detail="Camera name cannot be empty.")
 
     device = camera_monitor.get(payload.device_id)
-    _, modes, _ = camera_monitor.probe_modes(payload.device_id)
-    if modes:
-        supported = any(
-            m.width == payload.width and m.height == payload.height and abs(m.fps - payload.fps) <= 1.5
-            for m in modes
-        )
-        if not supported:
-            raise HTTPException(
-                status_code=400,
-                detail="This resolution/FPS is not reported as supported by the selected camera.",
-            )
+    # Probing all modes here is slow; trust the client-provided mode to keep saves snappy.
 
     serial_number = payload.serial_number or (device.serial_number if device else None)
     path = payload.path or (device.path if device else None)
+    container_id = payload.container_id or (device.container_id if device else None)
     kind = (payload.kind or (device.kind if device else "opencv")).lower()
     camera = RobotCamera(
         id=str(uuid.uuid4()),
@@ -231,10 +222,11 @@ def add_robot_camera(robot_id: str, payload: CameraCreate) -> Robot:
         kind=kind if kind in ("opencv", "realsense") else "opencv",
         path=path,
         serial_number=serial_number,
+        container_id=container_id,
         width=payload.width,
         height=payload.height,
         fps=payload.fps,
-        index=payload.index if payload.index is not None else (device.index if device else None),
+        index=None,  # Avoid persisting volatile OpenCV indices; rely on container_id/path instead.
     )
     updated = store.add_camera(robot_id, camera)
     return _with_status(updated or robot)

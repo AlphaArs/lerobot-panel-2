@@ -31,6 +31,7 @@ const defaultCameraForm = {
   fps: "",
   serial_number: "",
   path: "",
+  container_id: "",
 } as const;
 
 export default function RobotDetailPage() {
@@ -205,17 +206,27 @@ export default function RobotDetailPage() {
     setNameInput(robot.name);
   }, [robot, showRenameModal]);
 
+  const filteredCameraDevices = useMemo(() => {
+    if (!robot) return cameraDevices;
+    const matches = (dev: CameraDevice, cam: RobotCamera) =>
+      dev.id === cam.device_id ||
+      (!!cam.container_id && dev.container_id && dev.container_id === cam.container_id) ||
+      (!!cam.serial_number && dev.serial_number === cam.serial_number) ||
+      (!!cam.path && dev.path === cam.path);
+    return cameraDevices.filter((dev) => !(robot.cameras || []).some((cam) => matches(dev, cam)));
+  }, [cameraDevices, robot]);
+
   useEffect(() => {
     if (
       showAddCameraModal &&
       selectedCameraId &&
-      !cameraDevices.some((dev) => dev.id === selectedCameraId)
+      !filteredCameraDevices.some((dev) => dev.id === selectedCameraId)
     ) {
       setCameraValidation("The selected camera was disconnected.");
       setSelectedCameraId("");
       setCameraProbe(null);
     }
-  }, [cameraDevices, selectedCameraId, showAddCameraModal]);
+  }, [filteredCameraDevices, selectedCameraId, showAddCameraModal]);
 
   useEffect(() => {
     return () => {
@@ -255,22 +266,23 @@ export default function RobotDetailPage() {
 
   const commandsDisabled = robot?.status === "offline";
 
-  const currentDevice = cameraDevices.find((d) => d.id === selectedCameraId);
+  const currentDevice = filteredCameraDevices.find((d) => d.id === selectedCameraId);
   const cameraIsOnline = (cam: RobotCamera) =>
     cameraDevices.some(
       (dev) =>
         dev.id === cam.device_id ||
+        (!!cam.container_id && dev.container_id && dev.container_id === cam.container_id) ||
         (!!cam.serial_number && dev.serial_number === cam.serial_number) ||
         (!!cam.path && dev.path === cam.path)
     );
   const labelCounts = useMemo(() => {
     const counts: Record<string, number> = {};
-    cameraDevices.forEach((dev) => {
+    filteredCameraDevices.forEach((dev) => {
       const key = dev.label || dev.id;
       counts[key] = (counts[key] || 0) + 1;
     });
     return counts;
-  }, [cameraDevices]);
+  }, [filteredCameraDevices]);
   const numericWidth = Number(cameraForm.width) || 0;
   const numericHeight = Number(cameraForm.height) || 0;
   const numericFps = Number(cameraForm.fps) || 0;
@@ -395,6 +407,7 @@ export default function RobotDetailPage() {
       fps: "",
       serial_number: "",
       path: "",
+      container_id: "",
     });
     void refreshPreview(cameraId, undefined, { fastOnly: true, force: true }, previewTokenRef.current);
   };
@@ -437,6 +450,7 @@ export default function RobotDetailPage() {
         fps: best?.fps?.toString() || form.fps,
         serial_number: probe.device.serial_number || form.serial_number,
         path: probe.device.path || form.path,
+        container_id: probe.device.container_id || form.container_id,
       }));
       if (best) {
         const done = await refreshPreview(
@@ -601,7 +615,7 @@ export default function RobotDetailPage() {
         serial_number: cameraForm.serial_number || undefined,
         path: cameraForm.path || undefined,
         kind: currentDevice?.kind,
-        index: currentDevice?.index ?? null,
+        container_id: cameraForm.container_id || currentDevice?.container_id || null,
       });
       setRobot(updated);
       setFleet((list) => list.map((r) => (r.id === updated.id ? updated : r)));
@@ -793,7 +807,7 @@ export default function RobotDetailPage() {
               })}
             </div>
           ) : (
-            <Notice>No cameras saved yet. Add one to pin a device path or serial.</Notice>
+            <Notice>No cameras saved yet. Add one to pin a stable device path or serial.</Notice>
           )}
         </Panel>
 
@@ -866,8 +880,8 @@ export default function RobotDetailPage() {
               </Button>
             </div>
             <p className="text-sm text-muted">
-              Select a detected camera, confirm its resolution and FPS, and save it to this robot. We keep the device
-              path or serial number so it stays recognizable after re-plugging.
+              Select a detected camera, confirm its resolution and FPS, and save it to this robot. We keep stable IDs in
+              the background so it stays recognizable after reboots or re-plugging.
             </p>
             {cameraValidation && <span className="text-sm text-danger">{cameraValidation}</span>}
             <div className="grid gap-4 md:grid-cols-2">
@@ -875,7 +889,7 @@ export default function RobotDetailPage() {
                 <label>Detected cameras</label>
                 <select value={selectedCameraId} onChange={(e) => void handleSelectCamera(e.target.value)}>
                   <option value="">Pick a camera</option>
-                  {cameraDevices.map((dev) => (
+                  {filteredCameraDevices.map((dev) => (
                     <option key={dev.id} value={dev.id}>
                       {dev.label}
                       {labelCounts[dev.label] > 1 ? ` • ${dev.id.slice(-6)}` : ""}

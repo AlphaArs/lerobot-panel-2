@@ -52,10 +52,10 @@ def _clean_camera_entry(item: Dict) -> Dict:
         "kind": item.get("kind"),
         "path": item.get("path"),
         "serial_number": item.get("serial_number"),
+        "container_id": item.get("container_id"),
         "width": item.get("width"),
         "height": item.get("height"),
         "fps": item.get("fps"),
-        "index": item.get("index"),
         "created_at": item.get("created_at"),
     }
 
@@ -187,10 +187,17 @@ class RobotStore:
         return RobotCamera(
             id=data.get("id"),
             name=data.get("name", "Camera"),
-            device_id=data.get("device_id") or data.get("path") or data.get("serial_number") or data.get("id"),
+            device_id=(
+                data.get("device_id")
+                or data.get("container_id")
+                or data.get("path")
+                or data.get("serial_number")
+                or data.get("id")
+            ),
             kind=data.get("kind") or "opencv",
             path=data.get("path"),
             serial_number=data.get("serial_number"),
+            container_id=data.get("container_id"),
             width=int(data.get("width") or 0),
             height=int(data.get("height") or 0),
             fps=float(data.get("fps") or 0),
@@ -227,10 +234,9 @@ class RobotStore:
                     cameras = item.setdefault("cameras", [])
                     # Avoid duplicates by device_id + name combo
                     for existing in cameras:
-                        if (
-                            existing.get("device_id") == record.get("device_id")
-                            and existing.get("name") == record.get("name")
-                        ):
+                        same_device = existing.get("device_id") == record.get("device_id")
+                        same_container = record.get("container_id") and existing.get("container_id") == record.get("container_id")
+                        if (same_device or same_container) and existing.get("name") == record.get("name"):
                             existing.update(record)
                             break
                     else:
