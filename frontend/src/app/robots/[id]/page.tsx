@@ -64,8 +64,10 @@ export default function RobotDetailPage() {
   const [previewFailures, setPreviewFailures] = useState(0);
   const previewTokenRef = useRef(0);
   const [probeProgress, setProbeProgress] = useState(0);
-  const probeTimersRef = useRef<ReturnType<typeof setTimeout>[]>([]);
+  const probeResetRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const probeStepTimersRef = useRef<ReturnType<typeof setTimeout>[]>([]);
   const [presetsReady, setPresetsReady] = useState(false);
+  const [showPresets, setShowPresets] = useState(false);
 
   const loadData = useCallback(async () => {
     if (!robotId) return;
@@ -229,7 +231,7 @@ export default function RobotDetailPage() {
     setSelectedCameraId("");
     setCameraForm(defaultCameraForm);
     setCameraValidation(null);
-    clearProbeTimers();
+    clearProbeReset();
     setProbeProgress(0);
     setPresetsReady(false);
     if (cameraPreviewUrl) {
@@ -240,7 +242,7 @@ export default function RobotDetailPage() {
 
   useEffect(() => {
     return () => {
-      clearProbeTimers();
+      clearProbeReset();
     };
   }, []);
 
@@ -321,14 +323,28 @@ export default function RobotDetailPage() {
     );
   const suggestedMode = cameraProbe?.suggested || cameraProbe?.modes?.[0];
 
-  const clearProbeTimers = () => {
-    probeTimersRef.current.forEach((t) => clearTimeout(t));
-    probeTimersRef.current = [];
+  const clearProbeReset = () => {
+    if (probeResetRef.current) {
+      clearTimeout(probeResetRef.current);
+      probeResetRef.current = null;
+    }
   };
 
-  const stageProbeProgress = (value: number, delay = 0) => {
-    const timer = setTimeout(() => setProbeProgress(value), delay);
-    probeTimersRef.current.push(timer);
+  const clearProbeSteps = () => {
+    probeStepTimersRef.current.forEach((t) => clearTimeout(t));
+    probeStepTimersRef.current = [];
+  };
+
+  const scheduleProbeSteps = (timeoutMs: number) => {
+    clearProbeSteps();
+    const targets = [35, 65, 85];
+    const delay = Math.max(3000, Math.floor(timeoutMs / (targets.length + 2)));
+    targets.forEach((value, idx) => {
+      const timer = setTimeout(() => {
+        setProbeProgress((prev) => Math.max(prev, value));
+      }, delay * (idx + 1));
+      probeStepTimersRef.current.push(timer);
+    });
   };
 
   const openAddCameraFlow = () => {
@@ -346,8 +362,10 @@ export default function RobotDetailPage() {
       URL.revokeObjectURL(cameraPreviewUrl);
       setCameraPreviewUrl(null);
     }
-    clearProbeTimers();
+    clearProbeReset();
+    clearProbeSteps();
     setProbeProgress(0);
+    setShowPresets(false);
     const firstId = "";
     setSelectedCameraId(firstId);
     setShowAddCameraModal(true);
@@ -361,8 +379,10 @@ export default function RobotDetailPage() {
     setCameraValidation(null);
     setCameraPreviewUrl(null);
     setPresetsReady(false);
-    clearProbeTimers();
+    clearProbeReset();
+    clearProbeSteps();
     setProbeProgress(0);
+    setShowPresets(false);
     setAutoPreview(false);
     if (cameraPreviewUrl) {
       URL.revokeObjectURL(cameraPreviewUrl);
@@ -385,22 +405,30 @@ export default function RobotDetailPage() {
       return;
     }
     const prevSelected = selectedCameraId;
-    clearProbeTimers();
+    clearProbeReset();
+    clearProbeSteps();
     setPresetsReady(false);
-    setProbeProgress(5);
-    stageProbeProgress(20, 120);
-    stageProbeProgress(35, 260);
+    setProbeProgress(10);
     setProbingCamera(true);
+    scheduleProbeSteps(60_000);
     let probeSucceeded = false;
+    let timedOut = false;
+    const timeoutMs = 60_000;
+    const timeoutHandle = setTimeout(() => {
+      timedOut = true;
+      setCameraValidation("Detection timed out. Please try again. If it persists, unplug and replug the webcam.");
+      setProbingCamera(false);
+      setProbeProgress(0);
+      clearProbeSteps();
+    }, timeoutMs);
     try {
       const probe = await probeCameraDevice(selectedCameraId);
+      if (timedOut) {
+        return;
+      }
       setCameraProbe(probe);
-      setProbeProgress(60);
+      setProbeProgress(50);
       probeSucceeded = true;
-      // Smoothly step through the three resolution buckets.
-      resolutionOrder.forEach((_, idx) => {
-        stageProbeProgress(65 + idx * 8, 120 * (idx + 1));
-      });
       const best = probe.suggested || probe.modes[0];
       setCameraForm((form) => ({
         ...form,
@@ -423,7 +451,7 @@ export default function RobotDetailPage() {
         );
         if (done) {
           setProbeProgress(100);
-          stageProbeProgress(0, 800);
+          probeResetRef.current = setTimeout(() => setProbeProgress(0), 800);
         }
       }
       setAutoPreview(false);
@@ -432,6 +460,8 @@ export default function RobotDetailPage() {
       setCameraValidation(toMessage(err));
       setProbeProgress(0);
     } finally {
+      clearTimeout(timeoutHandle);
+      clearProbeSteps();
       if (probeSucceeded) {
         setPresetsReady(true);
       }
@@ -841,7 +871,7 @@ export default function RobotDetailPage() {
             </p>
             {cameraValidation && <span className="text-sm text-danger">{cameraValidation}</span>}
             <div className="grid gap-4 md:grid-cols-2">
-              <Stack className="gap-3">
+              <Stack className="gap-3 w-full">
                 <label>Detected cameras</label>
                 <select value={selectedCameraId} onChange={(e) => void handleSelectCamera(e.target.value)}>
                   <option value="">Pick a camera</option>
@@ -894,7 +924,7 @@ export default function RobotDetailPage() {
                   </div>
                 )}
                 {selectedCameraId && (
-                  <div className="space-y-3">
+                  <div className="space-y-3 w-full">
                     <label>Resolution</label>
                     <div className="grid grid-cols-2 gap-2">
                       <input
@@ -920,55 +950,6 @@ export default function RobotDetailPage() {
                       onChange={(e) => setCameraForm((form) => ({ ...form, fps: e.target.value }))}
                       placeholder="FPS"
                     />
-                    {presetsReady && supportedGrouped.some((g) => g.fps.length > 0) && (
-                      <div className="space-y-2">
-                        <div className="flex items-center justify-between">
-                          <label className="text-xs font-semibold text-muted">Presets</label>
-                          <span className="text-[11px] uppercase tracking-wide text-muted">480p · 720p · 1080p</span>
-                        </div>
-                        <div className="flex flex-col gap-3">
-                          {supportedGrouped.map((group) => {
-                            if (!group.fps.length) return null;
-                            return (
-                              <div key={`${group.label}-${group.width}x${group.height}`} className="flex flex-col gap-2">
-                                <div className="text-xs font-semibold text-muted">
-                                  {group.label} ({group.width}x{group.height})
-                                </div>
-                                <div className="flex flex-wrap items-center gap-2">
-                                  {group.fps.map((fps) => {
-                                    const active =
-                                      (!!numericWidth ? group.width === numericWidth : false) &&
-                                      (!!numericHeight ? group.height === numericHeight : false) &&
-                                      (!!numericFps ? Math.abs(fps - numericFps) <= 1.5 : false);
-                                    const mode = { width: group.width, height: group.height, fps };
-                                    return (
-                                      <button
-                                        key={`${group.label}-${fps}`}
-                                        className={`rounded-xl border px-3 py-1 text-xs ${
-                                          active ? "border-accent bg-accent/10" : "border-border bg-transparent text-muted"
-                                        }`}
-                                        onClick={() => {
-                                          setCameraForm((form) => ({
-                                            ...form,
-                                            width: group.width.toString(),
-                                            height: group.height.toString(),
-                                            fps: fps.toString(),
-                                          }));
-                                          void refreshPreview(selectedCameraId, mode);
-                                        }}
-                                        type="button"
-                                      >
-                                        {fps} FPS
-                                      </button>
-                                    );
-                                  })}
-                                </div>
-                              </div>
-                            );
-                          })}
-                        </div>
-                      </div>
-                    )}
                     {!isModeSupported && (
                       <Notice className="text-sm text-danger">
                         This camera did not report support for that FPS/resolution.
@@ -1035,6 +1016,67 @@ export default function RobotDetailPage() {
               </div>
             </div>
             <div className="h-px bg-border" />
+            {selectedCameraId && presetsReady && supportedGrouped.some((g) => g.fps.length > 0) && (
+              <div className="w-full space-y-2">
+                <button
+                  className="flex w-full items-center justify-between rounded-lg border border-border bg-panel px-3 py-2 text-xs font-semibold text-muted"
+                  type="button"
+                  onClick={() => setShowPresets((v) => !v)}
+                >
+                  <span>Optional presets (advanced)</span>
+                  <span>{showPresets ? "Hide" : "Show"}</span>
+                </button>
+                {showPresets && (
+                  <div className="space-y-3 rounded-lg border border-border bg-panel/60 p-3 w-full">
+                    <div className="text-[11px] uppercase tracking-wide text-muted w-full text-left">480p · 720p · 1080p</div>
+                    <div className="text-xs text-muted">
+                      This is optional. Use these only if you need exact resolution/FPS combos.
+                    </div>
+                    <div className="grid gap-3 md:grid-cols-3">
+                      {supportedGrouped.map((group) => {
+                        if (!group.fps.length) return null;
+                        return (
+                          <div key={`${group.label}-${group.width}x${group.height}`} className="flex flex-col gap-2 w-full">
+                            <div className="text-xs font-semibold text-muted">
+                              {group.label} ({group.width}x{group.height})
+                            </div>
+                            <div className="flex flex-wrap items-center gap-2">
+                              {group.fps.map((fps) => {
+                                const active =
+                                  (!!numericWidth ? group.width === numericWidth : false) &&
+                                  (!!numericHeight ? group.height === numericHeight : false) &&
+                                  (!!numericFps ? Math.abs(fps - numericFps) <= 1.5 : false);
+                                const mode = { width: group.width, height: group.height, fps };
+                                return (
+                                  <button
+                                    key={`${group.label}-${fps}`}
+                                    className={`rounded-xl border px-3 py-1 text-xs ${
+                                      active ? "border-accent bg-accent/10" : "border-border bg-transparent text-muted"
+                                    }`}
+                                    onClick={() => {
+                                      setCameraForm((form) => ({
+                                        ...form,
+                                        width: group.width.toString(),
+                                        height: group.height.toString(),
+                                        fps: fps.toString(),
+                                      }));
+                                      void refreshPreview(selectedCameraId, mode);
+                                    }}
+                                    type="button"
+                                  >
+                                    {fps} FPS
+                                  </button>
+                                );
+                              })}
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
             <div className="flex items-center gap-2">
               <Button variant="ghost" onClick={() => setShowAddCameraModal(false)}>
                 Cancel

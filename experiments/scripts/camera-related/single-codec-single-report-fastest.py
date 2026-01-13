@@ -90,7 +90,7 @@ def test_mode(cam_idx, label, w, h, fps, fourcc):
     )
 
 def main():
-    cam_idx = 0
+    cam_idx = 1
     for label, w, h in MODES:
         for fps in FPS_LIST:
             for fourcc in FOURCCS:
