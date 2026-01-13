@@ -63,6 +63,9 @@ export default function RobotDetailPage() {
   const [autoPreview, setAutoPreview] = useState(false);
   const [previewFailures, setPreviewFailures] = useState(0);
   const previewTokenRef = useRef(0);
+  const [probeProgress, setProbeProgress] = useState(0);
+  const probeTimersRef = useRef<ReturnType<typeof setTimeout>[]>([]);
+  const [presetsReady, setPresetsReady] = useState(false);
 
   const loadData = useCallback(async () => {
     if (!robotId) return;
@@ -226,11 +229,20 @@ export default function RobotDetailPage() {
     setSelectedCameraId("");
     setCameraForm(defaultCameraForm);
     setCameraValidation(null);
+    clearProbeTimers();
+    setProbeProgress(0);
+    setPresetsReady(false);
     if (cameraPreviewUrl) {
       URL.revokeObjectURL(cameraPreviewUrl);
       setCameraPreviewUrl(null);
     }
   }, [showAddCameraModal, cameraPreviewUrl]);
+
+  useEffect(() => {
+    return () => {
+      clearProbeTimers();
+    };
+  }, []);
 
   const formatLastSeen = (value?: string | null) => {
     if (!value) return "Never seen online";
@@ -260,17 +272,45 @@ export default function RobotDetailPage() {
   const numericWidth = Number(cameraForm.width) || 0;
   const numericHeight = Number(cameraForm.height) || 0;
   const numericFps = Number(cameraForm.fps) || 0;
+  const resolutionOrder = useMemo(
+    () => [
+      { label: "480p", width: 640, height: 480 },
+      { label: "720p", width: 1280, height: 720 },
+      { label: "1080p", width: 1920, height: 1080 },
+    ],
+    []
+  );
   const supportedModes = useMemo(() => {
-    const unique: CameraProbe["modes"] = [];
     const seen = new Set<string>();
+    const list: CameraProbe["modes"] = [];
+    const orderIndex = (w: number, h: number) =>
+      resolutionOrder.findIndex((r) => r.width === w && r.height === h);
     (cameraProbe?.modes || []).forEach((m) => {
-      const key = `${m.width}x${m.height}-${Math.round(m.fps * 100)}`;
+      const roundedFps = Math.round(m.fps);
+      const key = `${m.width}x${m.height}-${roundedFps}`;
       if (seen.has(key)) return;
       seen.add(key);
-      unique.push(m);
+      list.push({ ...m, fps: roundedFps });
     });
-    return unique;
-  }, [cameraProbe]);
+    return list.sort((a, b) => {
+      const ia = orderIndex(a.width, a.height);
+      const ib = orderIndex(b.width, b.height);
+      if (ia !== ib) return ia - ib;
+      return b.fps - a.fps;
+    });
+  }, [cameraProbe, resolutionOrder]);
+  const supportedGrouped = useMemo(
+    () =>
+      resolutionOrder.map((res) => ({
+        ...res,
+        fps: supportedModes
+          .filter((m) => m.width === res.width && m.height === res.height)
+          .map((m) => Math.round(m.fps))
+          .filter((fps, idx, arr) => arr.indexOf(fps) === idx)
+          .sort((a, b) => b - a),
+      })),
+    [resolutionOrder, supportedModes]
+  );
   const isModeSupported =
     supportedModes.length === 0 ||
     supportedModes.some(
@@ -281,11 +321,22 @@ export default function RobotDetailPage() {
     );
   const suggestedMode = cameraProbe?.suggested || cameraProbe?.modes?.[0];
 
+  const clearProbeTimers = () => {
+    probeTimersRef.current.forEach((t) => clearTimeout(t));
+    probeTimersRef.current = [];
+  };
+
+  const stageProbeProgress = (value: number, delay = 0) => {
+    const timer = setTimeout(() => setProbeProgress(value), delay);
+    probeTimersRef.current.push(timer);
+  };
+
   const openAddCameraFlow = () => {
     setCameraForm(defaultCameraForm);
     setCameraProbe(null);
     setCameraValidation(null);
     setAutoPreview(false);
+    setPresetsReady(false);
     if (cameraDevices.length === 0) {
       void fetchCameras()
         .then((list) => setCameraDevices(list))
@@ -295,6 +346,8 @@ export default function RobotDetailPage() {
       URL.revokeObjectURL(cameraPreviewUrl);
       setCameraPreviewUrl(null);
     }
+    clearProbeTimers();
+    setProbeProgress(0);
     const firstId = "";
     setSelectedCameraId(firstId);
     setShowAddCameraModal(true);
@@ -307,6 +360,9 @@ export default function RobotDetailPage() {
     setCameraProbe(null);
     setCameraValidation(null);
     setCameraPreviewUrl(null);
+    setPresetsReady(false);
+    clearProbeTimers();
+    setProbeProgress(0);
     setAutoPreview(false);
     if (cameraPreviewUrl) {
       URL.revokeObjectURL(cameraPreviewUrl);
@@ -329,31 +385,56 @@ export default function RobotDetailPage() {
       return;
     }
     const prevSelected = selectedCameraId;
+    clearProbeTimers();
+    setPresetsReady(false);
+    setProbeProgress(5);
+    stageProbeProgress(20, 120);
+    stageProbeProgress(35, 260);
     setProbingCamera(true);
+    let probeSucceeded = false;
     try {
       const probe = await probeCameraDevice(selectedCameraId);
       setCameraProbe(probe);
-      const best = probe.suggested || probe.modes[0];
-      setCameraForm((form) => {
-        const isNewDevice = selectedCameraId !== prevSelected || !form.name;
-        return {
-          ...form,
-          name: isNewDevice ? probe.device.label || form.name : form.name,
-          width: best?.width?.toString() || form.width,
-          height: best?.height?.toString() || form.height,
-          fps: best?.fps?.toString() || form.fps,
-          serial_number: probe.device.serial_number || form.serial_number,
-          path: probe.device.path || form.path,
-        };
+      setProbeProgress(60);
+      probeSucceeded = true;
+      // Smoothly step through the three resolution buckets.
+      resolutionOrder.forEach((_, idx) => {
+        stageProbeProgress(65 + idx * 8, 120 * (idx + 1));
       });
+      const best = probe.suggested || probe.modes[0];
+      setCameraForm((form) => ({
+        ...form,
+        width: best?.width?.toString() || form.width,
+        height: best?.height?.toString() || form.height,
+        fps: best?.fps?.toString() || form.fps,
+        serial_number: probe.device.serial_number || form.serial_number,
+        path: probe.device.path || form.path,
+      }));
       if (best) {
-        void refreshPreview(selectedCameraId, best, { fastOnly: true, force: true }, previewTokenRef.current);
+        const done = await refreshPreview(
+          selectedCameraId,
+          best,
+          {
+            fastOnly: true,
+            force: true,
+            onProgress: (v) => setProbeProgress((prev) => Math.max(prev, v)),
+          },
+          previewTokenRef.current
+        );
+        if (done) {
+          setProbeProgress(100);
+          stageProbeProgress(0, 800);
+        }
       }
       setAutoPreview(false);
       setCameraValidation(null);
     } catch (err) {
       setCameraValidation(toMessage(err));
+      setProbeProgress(0);
     } finally {
+      if (probeSucceeded) {
+        setPresetsReady(true);
+      }
       setProbingCamera(false);
     }
   };
@@ -362,7 +443,7 @@ export default function RobotDetailPage() {
     async (
       deviceId?: string,
       modeOverride?: { width?: number; height?: number; fps?: number },
-      options?: { fastOnly?: boolean; force?: boolean },
+      options?: { fastOnly?: boolean; force?: boolean; onProgress?: (value: number) => void },
       token?: number
     ) => {
       const activeToken = token ?? previewTokenRef.current;
@@ -371,6 +452,7 @@ export default function RobotDetailPage() {
       if (cameraPreviewLoading && !options?.force) return null;
       setCameraPreviewLoading(true);
       try {
+        options?.onProgress?.(70);
         const attempt = async (opts?: { width?: number; height?: number; fps?: number }) => {
           const blob = await fetchCameraSnapshot(target, opts || {});
           const url = URL.createObjectURL(blob);
@@ -395,6 +477,7 @@ export default function RobotDetailPage() {
 
         // Quick preview first
         await attempt(quickMode);
+        options?.onProgress?.(85);
         setPreviewFailures(0);
         if (options?.fastOnly) {
           return true;
@@ -415,13 +498,17 @@ export default function RobotDetailPage() {
         if (!sameAsQuick && (targetMode.width || targetMode.height || targetMode.fps)) {
           try {
             await attempt(targetMode);
+            options?.onProgress?.(100);
           } catch {
             // Ignore target failures; keep the quick frame
           }
+        } else {
+          options?.onProgress?.(100);
         }
         return true;
       } catch {
         setPreviewFailures((n) => n + 1);
+        options?.onProgress?.(0);
         return false;
       } finally {
         setCameraPreviewLoading(false);
@@ -754,7 +841,7 @@ export default function RobotDetailPage() {
             </p>
             {cameraValidation && <span className="text-sm text-danger">{cameraValidation}</span>}
             <div className="grid gap-4 md:grid-cols-2">
-              <Stack>
+              <Stack className="gap-3">
                 <label>Detected cameras</label>
                 <select value={selectedCameraId} onChange={(e) => void handleSelectCamera(e.target.value)}>
                   <option value="">Pick a camera</option>
@@ -798,8 +885,99 @@ export default function RobotDetailPage() {
                   </Button>
                   {probingCamera && <span className="text-sm text-muted">Probing camera...</span>}
                 </div>
+                {(probingCamera || probeProgress > 0) && (
+                  <div className="h-2 w-full overflow-hidden rounded-full bg-border">
+                    <div
+                      className="h-full rounded-full bg-accent transition-all"
+                      style={{ width: `${Math.min(100, probeProgress)}%` }}
+                    />
+                  </div>
+                )}
+                {selectedCameraId && (
+                  <div className="space-y-3">
+                    <label>Resolution</label>
+                    <div className="grid grid-cols-2 gap-2">
+                      <input
+                        type="number"
+                        value={cameraForm.width}
+                        min={1}
+                        onChange={(e) => setCameraForm((form) => ({ ...form, width: e.target.value }))}
+                        placeholder="Width"
+                      />
+                      <input
+                        type="number"
+                        value={cameraForm.height}
+                        min={1}
+                        onChange={(e) => setCameraForm((form) => ({ ...form, height: e.target.value }))}
+                        placeholder="Height"
+                      />
+                    </div>
+                    <label>FPS</label>
+                    <input
+                      type="number"
+                      value={cameraForm.fps}
+                      min={1}
+                      onChange={(e) => setCameraForm((form) => ({ ...form, fps: e.target.value }))}
+                      placeholder="FPS"
+                    />
+                    {presetsReady && supportedGrouped.some((g) => g.fps.length > 0) && (
+                      <div className="space-y-2">
+                        <div className="flex items-center justify-between">
+                          <label className="text-xs font-semibold text-muted">Presets</label>
+                          <span className="text-[11px] uppercase tracking-wide text-muted">480p · 720p · 1080p</span>
+                        </div>
+                        <div className="flex flex-col gap-3">
+                          {supportedGrouped.map((group) => {
+                            if (!group.fps.length) return null;
+                            return (
+                              <div key={`${group.label}-${group.width}x${group.height}`} className="flex flex-col gap-2">
+                                <div className="text-xs font-semibold text-muted">
+                                  {group.label} ({group.width}x{group.height})
+                                </div>
+                                <div className="flex flex-wrap items-center gap-2">
+                                  {group.fps.map((fps) => {
+                                    const active =
+                                      (!!numericWidth ? group.width === numericWidth : false) &&
+                                      (!!numericHeight ? group.height === numericHeight : false) &&
+                                      (!!numericFps ? Math.abs(fps - numericFps) <= 1.5 : false);
+                                    const mode = { width: group.width, height: group.height, fps };
+                                    return (
+                                      <button
+                                        key={`${group.label}-${fps}`}
+                                        className={`rounded-xl border px-3 py-1 text-xs ${
+                                          active ? "border-accent bg-accent/10" : "border-border bg-transparent text-muted"
+                                        }`}
+                                        onClick={() => {
+                                          setCameraForm((form) => ({
+                                            ...form,
+                                            width: group.width.toString(),
+                                            height: group.height.toString(),
+                                            fps: fps.toString(),
+                                          }));
+                                          void refreshPreview(selectedCameraId, mode);
+                                        }}
+                                        type="button"
+                                      >
+                                        {fps} FPS
+                                      </button>
+                                    );
+                                  })}
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    )}
+                    {!isModeSupported && (
+                      <Notice className="text-sm text-danger">
+                        This camera did not report support for that FPS/resolution.
+                      </Notice>
+                    )}
+                  </div>
+                )}
               </Stack>
-              <div className="flex flex-col gap-2">
+              <div className="flex flex-col gap-3">
                 <div className="min-h-[220px] rounded-soft border border-border bg-panel p-3">
                   {cameraPreviewUrl ? (
                     <img src={cameraPreviewUrl} alt="Camera preview" className="h-48 w-full rounded-xl object-cover" />
@@ -840,74 +1018,8 @@ export default function RobotDetailPage() {
                     <span className="text-danger">Preview paused after repeated errors. Click refresh.</span>
                   )}
                 </div>
-              </div>
-            </div>
-            <div className="grid gap-4 md:grid-cols-2">
-              <Stack>
-                <label>Resolution</label>
-                <div className="grid grid-cols-2 gap-2">
-                  <input
-                    type="number"
-                    value={cameraForm.width}
-                    min={1}
-                    onChange={(e) => setCameraForm((form) => ({ ...form, width: e.target.value }))}
-                    placeholder="Width"
-                  />
-                  <input
-                    type="number"
-                    value={cameraForm.height}
-                    min={1}
-                    onChange={(e) => setCameraForm((form) => ({ ...form, height: e.target.value }))}
-                    placeholder="Height"
-                  />
-                </div>
-                <label>FPS</label>
-                <input
-                  type="number"
-                  value={cameraForm.fps}
-                  min={1}
-                  onChange={(e) => setCameraForm((form) => ({ ...form, fps: e.target.value }))}
-                  placeholder="FPS"
-                />
-                {supportedModes.length > 0 && (
-                  <div className="flex flex-wrap items-center gap-2">
-                    {supportedModes.slice(0, 6).map((mode, idx) => {
-                      const active =
-                        (!!numericWidth ? mode.width === numericWidth : false) &&
-                        (!!numericHeight ? mode.height === numericHeight : false) &&
-                        (!!numericFps ? Math.abs(mode.fps - numericFps) <= 1.5 : false);
-                      return (
-                        <button
-                          key={`${mode.width}x${mode.height}-${Math.round(mode.fps * 100)}-${idx}`}
-                          className={`rounded-xl border px-3 py-1 text-xs ${
-                            active ? "border-accent bg-accent/10" : "border-border bg-transparent text-muted"
-                          }`}
-                          onClick={() => {
-                            setCameraForm((form) => ({
-                              ...form,
-                              width: mode.width.toString(),
-                              height: mode.height.toString(),
-                              fps: mode.fps.toString(),
-                            }));
-                            void refreshPreview(selectedCameraId, mode);
-                          }}
-                          type="button"
-                        >
-                          {mode.width}x{mode.height} @ {Math.round(mode.fps)} FPS
-                        </button>
-                      );
-                    })}
-                  </div>
-                )}
-                {!isModeSupported && (
-                  <Notice className="text-sm text-danger">
-                    This camera did not report support for that FPS/resolution.
-                  </Notice>
-                )}
-              </Stack>
-              <Stack>
-                <label>Suggested mode</label>
                 <div className="rounded-xl border border-border bg-panel p-3 text-sm text-muted">
+                  <div className="mb-2 text-xs font-semibold text-muted">Suggested mode</div>
                   {suggestedMode ? (
                     <div className="space-y-1 text-foreground">
                       <div>
@@ -920,7 +1032,7 @@ export default function RobotDetailPage() {
                     <div>No suggested mode reported. Pick values manually.</div>
                   )}
                 </div>
-              </Stack>
+              </div>
             </div>
             <div className="h-px bg-border" />
             <div className="flex items-center gap-2">

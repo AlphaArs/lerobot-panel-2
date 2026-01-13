@@ -7,20 +7,26 @@ from dataclasses import asdict, dataclass
 from typing import Dict, List, Optional, Set, Tuple
 
 POLL_SECONDS = 2.0
-# Keep probing snappy: fewer frames for FPS estimate and a short list of common modes.
-MAX_FPS_MEASURE_FRAMES = 8
-COMMON_MODES = [
-    (1920, 1080),
-    (1600, 1200),
-    (1280, 720),
-    (1024, 768),
+# Probe in a user-friendly order: 480p, 720p, 1080p.
+PROBE_RESOLUTIONS = [
     (640, 480),
+    (1280, 720),
+    (1920, 1080),
 ]
+TARGET_FPS = 60.0
+MIN_REPORTED_FPS = 15.0
+FPS_PRESETS = [30.0, 25.0, 15.0]
+FPS_MARGIN = 3.0
+SIGNATURE_SIZE = (32, 18)
 
 
 def _import_cv2():
     try:
         import cv2  # type: ignore
+        try:
+            cv2.utils.logging.setLogLevel(cv2.utils.logging.LOG_LEVEL_ERROR)
+        except Exception:
+            pass
 
         return cv2
     except Exception:
@@ -311,36 +317,98 @@ class CameraMonitor:
             return [], None
 
         accepted: List[CameraMode] = []
-        seen = set()
-        for w, h in COMMON_MODES:
-            try:
-                cap.set(cv2.CAP_PROP_FRAME_WIDTH, w)
-                cap.set(cv2.CAP_PROP_FRAME_HEIGHT, h)
-                self._force_mjpeg_last(cv2, cap)
-                time.sleep(0.02)
-                aw = int(round(cap.get(cv2.CAP_PROP_FRAME_WIDTH)))
-                ah = int(round(cap.get(cv2.CAP_PROP_FRAME_HEIGHT)))
-                if (aw, ah) != (w, h):
+        try:
+            for w, h in PROBE_RESOLUTIONS:
+                measured_fps = self._probe_resolution(cv2, cap, w, h)
+                if measured_fps < MIN_REPORTED_FPS:
                     continue
-                key = (aw, ah)
-                if key in seen:
-                    continue
-                seen.add(key)
-                fps = float(cap.get(cv2.CAP_PROP_FPS) or 0.0)
-                if fps <= 0.1:
-                    fps = self._measure_fps(cap)
-                accepted.append(CameraMode(width=aw, height=ah, fps=fps))
-            except Exception:
-                continue
-
-        cap.release()
+                for fps in self._fps_presets_from_measured(measured_fps):
+                    accepted.append(CameraMode(width=w, height=h, fps=fps))
+        finally:
+            cap.release()
 
         if not accepted and device.suggested:
             accepted.append(device.suggested)
 
-        accepted.sort(key=lambda m: (m.width * m.height, m.fps), reverse=True)
-        suggested = accepted[0] if accepted else None
+        # Keep resolution ordering as probed (480p -> 720p -> 1080p) and fps high->low.
+        accepted.sort(key=lambda m: (m.width * m.height, -m.fps))
+        suggested = max(accepted, key=lambda m: (m.width * m.height, m.fps)) if accepted else None
         return accepted, suggested
+
+    def _probe_resolution(self, cv2, cap, width: int, height: int) -> float:
+        try:
+            cap.set(cv2.CAP_PROP_FRAME_WIDTH, width)
+            cap.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
+            cap.set(cv2.CAP_PROP_FPS, TARGET_FPS)
+            self._force_mjpeg_last(cv2, cap)
+            try:
+                cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+            except Exception:
+                pass
+
+            time.sleep(0.05)
+            got_w = int(round(cap.get(cv2.CAP_PROP_FRAME_WIDTH)))
+            got_h = int(round(cap.get(cv2.CAP_PROP_FRAME_HEIGHT)))
+            if (got_w, got_h) != (width, height):
+                return 0.0
+            return self._measure_fps_fast(cv2, cap)
+        except Exception:
+            return 0.0
+
+    def _frame_signature(self, cv2, frame) -> int:
+        try:
+            small = cv2.resize(frame, SIGNATURE_SIZE, interpolation=cv2.INTER_AREA)
+            gray = cv2.cvtColor(small, cv2.COLOR_BGR2GRAY)
+            return int(gray.sum())
+        except Exception:
+            return 0
+
+    def _measure_fps_fast(self, cv2, cap, seconds: float = 0.35, warmup: int = 5, yield_sleep: float = 0.001) -> float:
+        last_sig: Optional[int] = None
+        for _ in range(warmup):
+            ok, frame = cap.read()
+            if not ok or frame is None:
+                return 0.0
+            last_sig = self._frame_signature(cv2, frame)
+            if yield_sleep:
+                time.sleep(yield_sleep)
+
+        if last_sig is None:
+            return 0.0
+
+        new_frames = 0
+        start = time.perf_counter()
+        while time.perf_counter() - start < seconds:
+            ok, frame = cap.read()
+            if not ok or frame is None:
+                break
+            sig = self._frame_signature(cv2, frame)
+            if sig != last_sig:
+                new_frames += 1
+                last_sig = sig
+            elif yield_sleep:
+                time.sleep(yield_sleep)
+
+        elapsed = time.perf_counter() - start
+        return new_frames / elapsed if elapsed > 0 else 0.0
+
+    def _fps_presets_from_measured(self, measured: float) -> List[float]:
+        if measured < MIN_REPORTED_FPS:
+            return []
+
+        selected: List[float] = []
+        for preset in FPS_PRESETS:
+            if measured + FPS_MARGIN >= preset:
+                selected.append(preset)
+        # Presets are already ordered high -> low; deduplicate for safety.
+        seen = set()
+        unique: List[float] = []
+        for fps in selected:
+            if fps in seen:
+                continue
+            seen.add(fps)
+            unique.append(fps)
+        return unique
 
     def _probe_realsense_modes(self, device: CameraDevice) -> tuple[List[CameraMode], Optional[CameraMode]]:
         try:
@@ -466,19 +534,6 @@ class CameraMonitor:
             except Exception:
                 pass
 
-    def _measure_fps(self, cap) -> float:
-        start = time.perf_counter()
-        frames = 0
-        for _ in range(MAX_FPS_MEASURE_FRAMES):
-            ok, _ = cap.read()
-            if not ok:
-                break
-            frames += 1
-        elapsed = time.perf_counter() - start
-        if elapsed <= 0:
-            return 0.0
-        return frames / elapsed
-
     def _force_mjpeg_last(self, cv2, cap) -> None:
         """Request MJPEG; safe if ignored. Must be called AFTER setting width/height/fps."""
         try:
@@ -486,10 +541,9 @@ class CameraMonitor:
         except Exception:
             pass
         try:
-           cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+            cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
         except Exception:
             pass
-
 
     def _backend_flag(self, cv2, backend: Optional[str]):
         if not backend:
@@ -508,6 +562,7 @@ class CameraMonitor:
 
         attempts = []
         matched_index = None
+        path_index = None
         try:
             from cv2_enumerate_cameras import enumerate_cameras  # type: ignore
 
@@ -518,40 +573,43 @@ class CameraMonitor:
                         and str(cam.pid or "").lower() == (device.product_id or "").lower()
                     )
                     path_match = (cam.path or "").lower() == (device.path or "").lower()
-                    if path_match or vid_pid_match:
-                        matched_index = cam.index
+                    if path_match:
+                        path_index = cam.index
                         break
+                    if vid_pid_match and matched_index is None:
+                        matched_index = cam.index
                 except Exception:
                     continue
         except Exception:
             matched_index = None
 
-        if device.path:
+        preferred_index = path_index if path_index is not None else matched_index
+        # Prefer opening by matched/index first (GUID-style paths are unreliable with DSHOW).
+        if preferred_index is not None:
             attempts.extend(
                 [
-                    (device.path, "dshow"),
-                    (device.path, device.backend),
-                    (device.path, "msmf"),
-                    (device.path, "any"),
-                ]
-            )
-        # Prefer a matched index by VID/PID/path if path open fails
-        if matched_index is not None:
-            attempts.extend(
-                [
-                    (matched_index, device.backend),
-                    (matched_index, "dshow"),
-                    (matched_index, "msmf"),
-                    (matched_index, "any"),
+                    (preferred_index, device.backend),
+                    (preferred_index, "msmf"),
+                    (preferred_index, "dshow"),
+                    (preferred_index, "any"),
                 ]
             )
         if device.index is not None:
             attempts.extend(
                 [
                     (device.index, device.backend),
-                    (device.index, "dshow"),
                     (device.index, "msmf"),
+                    (device.index, "dshow"),
                     (device.index, "any"),
+                ]
+            )
+        if device.path:
+            attempts.extend(
+                [
+                    (device.path, "msmf"),
+                    (device.path, device.backend),
+                    (device.path, "dshow"),
+                    (device.path, "any"),
                 ]
             )
 

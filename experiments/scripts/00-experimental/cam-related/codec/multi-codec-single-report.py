@@ -4,6 +4,7 @@ import time
 BACKEND = cv2.CAP_DSHOW  # backend that worked for you
 
 MODES = [
+    ("480p",  640,  480),
     ("720p",  1280,  720),
     ("1080p", 1920, 1080),
 ]
