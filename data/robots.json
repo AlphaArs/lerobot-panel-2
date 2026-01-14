@@ -23,33 +23,33 @@
       "model": "so101",
       "role": "follower",
       "com_port": "COM13",
-      "last_seen": "2026-01-14T10:36:00.367194",
+      "last_seen": "2026-01-14T11:09:12.279791",
       "cameras": [
         {
-          "id": "cc5b0b07-cc07-4c79-9f84-57700f61cebf",
-          "name": "Grip",
+          "id": "c0b9cd69-ff68-45d6-81bb-c5e4eda4d66d",
+          "name": "grip",
           "device_id": "opencv:-usb-vid_0bdc-pid_2710-mi_00-b-f44e209-0-0000-65e8773d-8f56-11d0-a3b9-00a0c9223196-global",
           "kind": "opencv",
           "path": "\\\\?\\usb#vid_0bdc&pid_2710&mi_00#b&f44e209&0&0000#{65e8773d-8f56-11d0-a3b9-00a0c9223196}\\global",
           "serial_number": null,
           "container_id": "{dd7e882a-df37-11f0-a37e-9843fa014027}",
-          "width": 1920,
-          "height": 1080,
+          "width": 640,
+          "height": 480,
           "fps": 30.0,
-          "created_at": "2026-01-13 14:22:24.045892"
+          "created_at": "2026-01-14 11:06:40.092035"
         },
         {
-          "id": "fb8ad79f-470d-4a28-aa7f-c55663b931fd",
+          "id": "8e021c93-08d5-4eeb-b0b4-f419e6b38c3b",
           "name": "foot",
           "device_id": "opencv:-usb-vid_0bdc-pid_2710-mi_00-3-20578fd5-0-0000-65e8773d-8f56-11d0-a3b9-00a0c9223196-global",
           "kind": "opencv",
           "path": "\\\\?\\usb#vid_0bdc&pid_2710&mi_00#3&20578fd5&0&0000#{65e8773d-8f56-11d0-a3b9-00a0c9223196}\\global",
           "serial_number": null,
           "container_id": "{baa8a8e8-8d5a-562b-ac63-9339b436d203}",
-          "width": 1920,
-          "height": 1080,
+          "width": 640,
+          "height": 480,
           "fps": 30.0,
-          "created_at": "2026-01-13 14:31:52.752365"
+          "created_at": "2026-01-14 11:07:15.563413"
         }
       ]
     },
@@ -59,7 +59,7 @@
       "model": "so101",
       "role": "leader",
       "com_port": "COM14",
-      "last_seen": "2026-01-14T10:36:00.367700"
+      "last_seen": "2026-01-14T11:09:12.280291"
     }
   ]
 }

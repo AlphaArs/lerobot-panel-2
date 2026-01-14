@@ -396,6 +396,26 @@ export default function TeleopPage() {
 
   const commandString = lastCommand || defaultCommandString;
 
+  const cameraTotal = follower?.cameras?.length || 0;
+  const cameraReadyCount = useMemo(() => {
+    if (cameraTotal === 0) return 0;
+    const ready = new Set<string>();
+    const patterns = [
+      /OpenCVCamera\(([^)]+)\)\s+connected/i,
+      /OpenCVCamera\(([^)]+)\)\s+negotiated/i,
+      /RealSenseCamera\(([^)]+)\)\s+connected/i,
+    ];
+    logs.forEach((line) => {
+      patterns.forEach((re) => {
+        const match = line.match(re);
+        if (match?.[1]) {
+          ready.add(match[1].trim());
+        }
+      });
+    });
+    return Math.min(ready.size, cameraTotal);
+  }, [cameraTotal, logs]);
+
   const start = async () => {
     if (!leader || !follower) {
       setError("Leader or follower missing.");
@@ -644,6 +664,39 @@ export default function TeleopPage() {
                 <circle cx="140" cy="90" r="10" />
               </svg>
             </div>
+            {cameraTotal > 0 && (
+              <div className="stack" style={{ gap: 6, marginTop: 12, alignItems: "center" }}>
+                <div className="row" style={{ alignItems: "center", gap: 8 }}>
+                  <span className="tag">Cameras</span>
+                  <span className="muted" style={{ fontSize: 13 }}>
+                    {cameraReadyCount}/{cameraTotal} ready
+                  </span>
+                </div>
+                <div
+                  style={{
+                    position: "relative",
+                    width: "100%",
+                    maxWidth: 420,
+                    height: 8,
+                    background: "rgba(0,0,0,0.08)",
+                    borderRadius: 999,
+                    overflow: "hidden",
+                  }}
+                >
+                  <div
+                    style={{
+                      position: "absolute",
+                      left: 0,
+                      top: 0,
+                      bottom: 0,
+                      width: `${(cameraReadyCount / cameraTotal) * 100}%`,
+                      background: "linear-gradient(90deg, #4caf50, #6ddf7c)",
+                      transition: "width 0.2s ease",
+                    }}
+                  />
+                </div>
+              </div>
+            )}
             <div className="row" style={{ justifyContent: "center", gap: 10, marginTop: 14 }}>
               <button className="btn btn-ghost" onClick={handleBack} disabled={loading}>
                 Cancel
@@ -675,7 +728,9 @@ export default function TeleopPage() {
               {!bothConnected
                 ? "Waiting for both devices to be online..."
                 : teleopStarting
-                  ? "Waiting for the robot to connect..."
+                  ? cameraTotal > 0 && cameraReadyCount < cameraTotal
+                    ? "Waiting for cameras to connect..."
+                    : "Waiting for the robot to connect..."
                   : " "}
             </p>
           </div>
