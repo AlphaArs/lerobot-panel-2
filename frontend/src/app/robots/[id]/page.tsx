@@ -265,6 +265,7 @@ export default function RobotDetailPage() {
   };
 
   const commandsDisabled = robot?.status === "offline";
+  const showCameraManagement = robot?.role !== "leader";
 
   const currentDevice = filteredCameraDevices.find((d) => d.id === selectedCameraId);
   const cameraIsOnline = (cam: RobotCamera) =>
@@ -770,47 +771,49 @@ export default function RobotDetailPage() {
           </div>
         </Panel>
 
-        <Panel className="flex flex-col gap-3">
-          <div className="flex flex-wrap items-center gap-3">
-            <strong>Cameras</strong>
-            <Tag className="online">Live devices</Tag>
-            <Spacer />
-            <Button variant="primary" onClick={openAddCameraFlow}>
-              Add camera
-            </Button>
-          </div>
-          {robot?.cameras?.length ? (
-            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
-              {robot.cameras.map((cam) => {
-                const online = cameraIsOnline(cam);
-                return (
-                  <div
-                    key={cam.id}
-                    className="list-row w-full max-w-sm items-start gap-3"
-                  >
-                    <div className="flex flex-1 flex-col gap-1">
-                      <div className="flex flex-wrap items-center gap-3">
-                        <div className="font-semibold">{cam.name}</div>
-                        <Tag className="capitalize">{cam.kind}</Tag>
-                        <Tag className={`capitalize ${online ? "online" : "offline"}`}>
-                          {online ? "online" : "offline"}
-                        </Tag>
-                      </div>
-                      <span className="text-sm text-muted">
-                        {cam.width}x{cam.height} @ {cam.fps} FPS
-                      </span>
-                    </div>
-                    <Button variant="ghost" onClick={() => void handleRemoveCamera(cam.id)}>
-                      Remove
-                    </Button>
-                  </div>
-                );
-              })}
+        {showCameraManagement && (
+          <Panel className="flex flex-col gap-3">
+            <div className="flex flex-wrap items-center gap-3">
+              <strong>Cameras</strong>
+              <Tag className="online">Live devices</Tag>
+              <Spacer />
+              <Button variant="primary" onClick={openAddCameraFlow}>
+                Add camera
+              </Button>
             </div>
-          ) : (
-            <Notice>No cameras saved yet. Add one to pin a stable device path or serial.</Notice>
-          )}
-        </Panel>
+            {robot?.cameras?.length ? (
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                {robot.cameras.map((cam) => {
+                  const online = cameraIsOnline(cam);
+                  return (
+                    <div
+                      key={cam.id}
+                      className="list-row w-full max-w-sm items-start gap-3"
+                    >
+                      <div className="flex flex-1 flex-col gap-1">
+                        <div className="flex flex-wrap items-center gap-3">
+                          <div className="font-semibold">{cam.name}</div>
+                          <Tag className="capitalize">{cam.kind}</Tag>
+                          <Tag className={`capitalize ${online ? "online" : "offline"}`}>
+                            {online ? "online" : "offline"}
+                          </Tag>
+                        </div>
+                        <span className="text-sm text-muted">
+                          {cam.width}x{cam.height} @ {cam.fps} FPS
+                        </span>
+                      </div>
+                      <Button variant="ghost" onClick={() => void handleRemoveCamera(cam.id)}>
+                        Remove
+                      </Button>
+                    </div>
+                  );
+                })}
+              </div>
+            ) : (
+              <Notice>No cameras saved yet. Add one to pin a stable device path or serial.</Notice>
+            )}
+          </Panel>
+        )}
 
         <div className="grid gap-4 md:grid-cols-2">
           <Panel className={commandsDisabled ? "opacity-60" : ""}>

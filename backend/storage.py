@@ -68,19 +68,22 @@ class RobotStore:
         self._data = self._load()
 
     def _clean_record(self, item: Dict) -> Dict:
-        return {
+        record = {
             "id": item.get("id"),
             "name": item.get("name"),
             "model": item.get("model"),
             "role": item.get("role"),
             "com_port": item.get("com_port"),
             "last_seen": item.get("last_seen"),
-            "cameras": [
+        }
+        # Leader arms do not carry cameras; avoid persisting an empty cameras section for them.
+        if item.get("role") != "leader":
+            record["cameras"] = [
                 _clean_camera_entry(cam)
                 for cam in item.get("cameras", [])
                 if isinstance(cam, dict)
-            ],
-        }
+            ]
+        return record
 
     def _load(self) -> Dict:
         if self.path.exists():
@@ -231,6 +234,8 @@ class RobotStore:
         with self._lock:
             for item in self._data.get("robots", []):
                 if item.get("id") == robot_id:
+                    if item.get("role") == "leader":
+                        return self._to_robot(item)
                     cameras = item.setdefault("cameras", [])
                     # Avoid duplicates by device_id + name combo
                     for existing in cameras:
