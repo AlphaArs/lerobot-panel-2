@@ -148,21 +148,17 @@ def _format_robot_cameras_arg(
             notes.append(f"[panel] Skipped camera '{cam.name}' (no index/path resolved).")
             continue
 
-        width = cam.width or DEFAULT_CAMERA_WIDTH
-        height = cam.height or DEFAULT_CAMERA_HEIGHT
+        width = int(cam.width or DEFAULT_CAMERA_WIDTH)
+        height = int(cam.height or DEFAULT_CAMERA_HEIGHT)
         fps = float(cam.fps or DEFAULT_CAMERA_FPS)
+        target_fps_values.append(fps)
 
-        target_width = int(min(width, DEFAULT_CAMERA_WIDTH))
-        target_height = int(min(height, DEFAULT_CAMERA_HEIGHT))
-        target_fps = float(min(fps, DEFAULT_CAMERA_FPS))
-        target_fps_values.append(target_fps)
-
-        fps_rendered = int(target_fps) if target_fps.is_integer() else round(target_fps, 2)
+        fps_rendered = int(fps) if fps.is_integer() else round(fps, 2)
         parts = [
             f"type: {cam.kind or 'opencv'}",
             f"index_or_path: {index_or_path}",
-            f"width: {target_width}",
-            f"height: {target_height}",
+            f"width: {width}",
+            f"height: {height}",
             f"fps: {fps_rendered}",
         ]
         if (cam.kind or "opencv").lower() == "opencv":
@@ -176,7 +172,8 @@ def _format_robot_cameras_arg(
         return [], None, notes
 
     cameras_value = f"{{{', '.join(entries)}}}"
-    loop_fps = int(min([DEFAULT_TELEOP_FPS, *[v for v in target_fps_values if v > 0]]))
+    valid_fps = [v for v in target_fps_values if v > 0]
+    loop_fps = int(round(min(valid_fps))) if valid_fps else DEFAULT_TELEOP_FPS
     args = [f"--robot.cameras={cameras_value}", "--display_data=true", f"--fps={loop_fps}"]
     return args, loop_fps, notes
 

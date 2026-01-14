@@ -360,9 +360,10 @@ export default function TeleopPage() {
         cam.device_id ??
         cam.serial_number ??
         "?";
-      const width = Math.min(cam.width || DEFAULT_WIDTH, DEFAULT_WIDTH);
-      const height = Math.min(cam.height || DEFAULT_HEIGHT, DEFAULT_HEIGHT);
-      const fps = Math.min(Math.round(cam.fps || DEFAULT_FPS), DEFAULT_FPS);
+      const width = cam.width || DEFAULT_WIDTH;
+      const height = cam.height || DEFAULT_HEIGHT;
+      const fpsRaw = cam.fps || DEFAULT_FPS;
+      const fps = Number.isFinite(fpsRaw) ? Math.round(fpsRaw) : DEFAULT_FPS;
       const kind = cam.kind || "opencv";
       const fourcc = kind.toLowerCase() === "opencv" ? ", fourcc: MJPG" : "";
 
@@ -376,9 +377,13 @@ export default function TeleopPage() {
     if (!follower?.cameras?.length) return null;
     const DEFAULT_FPS = 20;
     const fpsValues = follower.cameras
-      .map((cam) => Math.min(Math.round(cam.fps || DEFAULT_FPS), DEFAULT_FPS))
+      .map((cam) => {
+        const fps = cam.fps || DEFAULT_FPS;
+        const rounded = Number.isFinite(fps) ? Math.round(fps) : DEFAULT_FPS;
+        return rounded;
+      })
       .filter((fps) => fps > 0);
-    return Math.min(DEFAULT_FPS, ...(fpsValues.length ? fpsValues : [DEFAULT_FPS]));
+    return (fpsValues.length ? Math.min(...fpsValues) : DEFAULT_FPS) || DEFAULT_FPS;
   }, [follower]);
 
   const defaultCommandString = useMemo(() => {
