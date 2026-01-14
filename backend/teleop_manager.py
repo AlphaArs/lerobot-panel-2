@@ -10,6 +10,7 @@ from pathlib import Path
 from threading import Lock, Thread
 from typing import Deque, Optional
 
+from .camera_monitor import CameraMonitor
 from .commands import _build_env, _find_repo_root, build_teleop_cmd
 from .models import Robot
 
@@ -41,10 +42,11 @@ class TeleopSessionState:
 
 
 class TeleopManager:
-    def __init__(self) -> None:
+    def __init__(self, camera_monitor: CameraMonitor | None = None) -> None:
         self._sessions: dict[str, TeleopSessionState] = {}
         self._active_session_id: str | None = None
         self._lock = Lock()
+        self._camera_monitor = camera_monitor
 
     def _store(self, state: TeleopSessionState) -> None:
         with self._lock:
@@ -68,7 +70,14 @@ class TeleopManager:
             return False, "Another teleop session is already running. Stop it first.", current
 
         session_id = uuid.uuid4().hex
-        cmd = build_teleop_cmd(leader, follower)
+        devices = self._camera_monitor.snapshot() if self._camera_monitor else None
+        resolver = self._camera_monitor.resolve_index_from_container_id if self._camera_monitor else None
+        cmd, camera_notes = build_teleop_cmd(
+            leader,
+            follower,
+            camera_devices=devices,
+            resolve_index_from_container=resolver,
+        )
         readable = subprocess.list2cmdline(cmd) if os.name == "nt" else " ".join(cmd)
 
         state = TeleopSessionState(
@@ -81,6 +90,8 @@ class TeleopManager:
         )
 
         state.logs.append(f"Starting: {readable}")
+        for note in camera_notes:
+            state.logs.append(note)
         self._store(state)
         with self._lock:
             self._active_session_id = state.id

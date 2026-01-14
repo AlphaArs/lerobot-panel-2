@@ -1,8 +1,18 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { Robot, fetchRobots, robotsWsUrl, startTeleop, stopTeleop, teleopWsUrl } from "@/lib/api";
+import {
+  CameraDevice,
+  Robot,
+  fetchCameras,
+  fetchRobots,
+  robotsWsUrl,
+  camerasWsUrl,
+  startTeleop,
+  stopTeleop,
+  teleopWsUrl,
+} from "@/lib/api";
 
 const toMessage = (err: unknown) => (err instanceof Error ? err.message : "Request failed");
 
@@ -15,6 +25,7 @@ export default function TeleopPage() {
   const [robots, setRobots] = useState<Robot[]>([]);
   const [leader, setLeader] = useState<Robot | null>(null);
   const [follower, setFollower] = useState<Robot | null>(null);
+  const [cameraDevices, setCameraDevices] = useState<CameraDevice[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
@@ -25,6 +36,7 @@ export default function TeleopPage() {
   const [safetyModal, setSafetyModal] = useState(true);
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [teleopStarting, setTeleopStarting] = useState(false);
+  const [lastCommand, setLastCommand] = useState<string | null>(null);
   const [disconnectModalOpen, setDisconnectModalOpen] = useState(false);
   const [disconnectAlertRoles, setDisconnectAlertRoles] = useState<Array<"leader" | "follower">>([]);
 
@@ -142,6 +154,52 @@ export default function TeleopPage() {
   }, []);
 
   useEffect(() => {
+    let socket: WebSocket | null = null;
+    let stopped = false;
+    let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+
+    const load = async () => {
+      try {
+        const list = await fetchCameras();
+        if (!stopped) {
+          setCameraDevices(list);
+        }
+      } catch {
+        // ignore failures; websocket will update us
+      }
+    };
+
+    void load();
+
+    const connect = () => {
+      if (stopped) return;
+      socket = new WebSocket(camerasWsUrl);
+      socket.onmessage = (event) => {
+        if (stopped) return;
+        try {
+          const payload = JSON.parse(event.data);
+          if (payload?.type === "camera_devices" && Array.isArray(payload.devices)) {
+            setCameraDevices(payload.devices);
+          }
+        } catch {
+          // ignore malformed payloads
+        }
+      };
+      socket.onclose = () => {
+        if (stopped) return;
+        reconnectTimer = setTimeout(connect, 1500);
+      };
+    };
+
+    connect();
+    return () => {
+      stopped = true;
+      if (reconnectTimer) clearTimeout(reconnectTimer);
+      if (socket) socket.close();
+    };
+  }, []);
+
+  useEffect(() => {
     const l = robots.find((r) => r.id === leaderId) || null;
     const f = robots.find((r) => r.id === followerId) || null;
     setLeader(l);
@@ -154,6 +212,7 @@ export default function TeleopPage() {
     setLogs([]);
     setMessage(null);
     setError(null);
+    setLastCommand(null);
     setSafetyModal(true);
     setTeleopStarting(false);
     setDisconnectModalOpen(false);
@@ -263,9 +322,74 @@ export default function TeleopPage() {
     return `${leader.model}_${leader.role}`;
   }, [leader]);
 
-  const commandString = follower && leader
-    ? `lerobot-teleoperate --robot.type=${followerDeviceType} --robot.port=${follower.com_port} --robot.id=${follower.name} --teleop.type=${leaderDeviceType} --teleop.port=${leader.com_port} --teleop.id=${leader.name}`
-    : "lerobot-teleoperate ...";
+  const resolveCameraDevice = useCallback(
+    (cam: Robot["cameras"][number]) =>
+      cameraDevices.find(
+        (dev) =>
+          dev.id === cam.device_id ||
+          (!!cam.container_id && !!dev.container_id && dev.container_id === cam.container_id) ||
+          (!!cam.serial_number && !!dev.serial_number && dev.serial_number === cam.serial_number) ||
+          (!!cam.path && !!dev.path && dev.path === cam.path)
+      ),
+    [cameraDevices]
+  );
+
+  const cameraArgs = useMemo(() => {
+    if (!follower?.cameras?.length) return "";
+    const seen = new Set<string>();
+    const DEFAULT_WIDTH = 1280;
+    const DEFAULT_HEIGHT = 720;
+    const DEFAULT_FPS = 20;
+
+    const payload = follower.cameras.map((cam) => {
+      const device = resolveCameraDevice(cam);
+      const base = (cam.name || "camera").trim().toLowerCase().replace(/[^a-z0-9_-]+/g, "_") || "camera";
+      let name = base;
+      let counter = 1;
+      while (seen.has(name)) {
+        name = `${base}_${counter}`;
+        counter += 1;
+      }
+      seen.add(name);
+
+      const indexOrPath =
+        device?.index ??
+        device?.path ??
+        cam.container_id ??
+        cam.path ??
+        cam.device_id ??
+        cam.serial_number ??
+        "?";
+      const width = Math.min(cam.width || DEFAULT_WIDTH, DEFAULT_WIDTH);
+      const height = Math.min(cam.height || DEFAULT_HEIGHT, DEFAULT_HEIGHT);
+      const fps = Math.min(Math.round(cam.fps || DEFAULT_FPS), DEFAULT_FPS);
+      const kind = cam.kind || "opencv";
+      const fourcc = kind.toLowerCase() === "opencv" ? ", fourcc: MJPG" : "";
+
+      return `${name}: {type: ${kind}, index_or_path: ${indexOrPath}, width: ${width}, height: ${height}, fps: ${fps}${fourcc ? fourcc.replace(/^, /, ", ") : ""}}`;
+    });
+
+    return `{${payload.join(", ")}}`;
+  }, [follower, resolveCameraDevice]);
+
+  const cameraLoopFps = useMemo(() => {
+    if (!follower?.cameras?.length) return null;
+    const DEFAULT_FPS = 20;
+    const fpsValues = follower.cameras
+      .map((cam) => Math.min(Math.round(cam.fps || DEFAULT_FPS), DEFAULT_FPS))
+      .filter((fps) => fps > 0);
+    return Math.min(DEFAULT_FPS, ...(fpsValues.length ? fpsValues : [DEFAULT_FPS]));
+  }, [follower]);
+
+  const defaultCommandString = useMemo(() => {
+    if (!follower || !leader) return "lerobot-teleoperate ...";
+    const base = `lerobot-teleoperate --robot.type=${followerDeviceType} --robot.port=${follower.com_port} --robot.id=${follower.name} --teleop.type=${leaderDeviceType} --teleop.port=${leader.com_port} --teleop.id=${leader.name}`;
+    if (!cameraArgs) return base;
+    const loopFps = cameraLoopFps ?? 20;
+    return `${base} --fps=${loopFps} --robot.cameras="${cameraArgs}" --display_data=true`;
+  }, [cameraArgs, cameraLoopFps, follower, followerDeviceType, leader, leaderDeviceType]);
+
+  const commandString = lastCommand || defaultCommandString;
 
   const start = async () => {
     if (!leader || !follower) {
@@ -278,9 +402,14 @@ export default function TeleopPage() {
     suppressDisconnectModalUntilRef.current = Date.now() + 2500;
     setError(null);
     setMessage(null);
-    setLogs([`Starting: ${commandString}`]);
+    const startPreview = defaultCommandString;
+    setLastCommand(null);
+    setLogs([`Starting: ${startPreview}`]);
     try {
       const res = await startTeleop(leader.id, follower.id);
+      const readableCmd = res.command || startPreview;
+      setLastCommand(res.command || null);
+      setLogs([`Starting: ${readableCmd}`]);
       setMessage(res.message);
       setSessionId(res.session_id || null);
       setRunning(!res.dry_run);

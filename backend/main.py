@@ -48,7 +48,7 @@ store = RobotStore()
 monitor = DeviceMonitor()
 camera_monitor = CameraMonitor()
 calibration_manager = CalibrationManager()
-teleop_manager = TeleopManager()
+teleop_manager = TeleopManager(camera_monitor)
 
 
 @app.on_event("startup")

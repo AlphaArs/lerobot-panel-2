@@ -1,14 +1,21 @@
 from __future__ import annotations
 
 import os
+import re
 import shlex
 import shutil
 import subprocess
 import sys
 from pathlib import Path
-from typing import Dict, Tuple
+from typing import Callable, Dict, Iterable, Tuple
 
-from .models import Robot
+from .models import Robot, RobotCamera
+
+DEFAULT_TELEOP_FPS = 20
+DEFAULT_CAMERA_WIDTH = 1280
+DEFAULT_CAMERA_HEIGHT = 720
+DEFAULT_CAMERA_FPS = 20.0
+DEFAULT_CAMERA_FOURCC = "MJPG"
 
 
 def _find_repo_root() -> Path | None:
@@ -35,6 +42,143 @@ def _resolve_console_script(name: str) -> str | None:
     if candidate.exists():
         return str(candidate)
     return shutil.which(name)
+
+
+def _slugify_camera_name(name: str, *, fallback: str = "cam") -> str:
+    cleaned = re.sub(r"[^A-Za-z0-9_-]+", "_", (name or "").strip().lower())
+    return cleaned or fallback
+
+
+def _resolve_camera_target(
+    cam: RobotCamera,
+    devices: Iterable[object],
+    resolve_index_from_container: Callable[[str], int | None] | None,
+) -> tuple[object | None, str | None]:
+    """
+    Try to translate a saved camera entry back to a live OpenCV index or device path.
+    """
+
+    def _norm(value: object | None) -> str:
+        return (str(value or "")).strip().lower()
+
+    if resolve_index_from_container and cam.container_id:
+        try:
+            resolved = resolve_index_from_container(cam.container_id)
+            if resolved is not None:
+                return resolved, "container_id"
+        except Exception:
+            pass
+
+    for dev in devices:
+        if cam.container_id and _norm(getattr(dev, "container_id", None)) == _norm(cam.container_id):
+            value = (
+                getattr(dev, "index", None)
+                if getattr(dev, "index", None) is not None
+                else (getattr(dev, "path", None) or getattr(dev, "id", None))
+            )
+            return value, "container_id"
+
+    for dev in devices:
+        if cam.path and _norm(getattr(dev, "path", None)) == _norm(cam.path):
+            value = (
+                getattr(dev, "index", None)
+                if getattr(dev, "index", None) is not None
+                else (getattr(dev, "path", None) or getattr(dev, "id", None))
+            )
+            return value, "path"
+
+    for dev in devices:
+        if cam.serial_number and _norm(getattr(dev, "serial_number", None)) == _norm(cam.serial_number):
+            value = (
+                getattr(dev, "index", None)
+                if getattr(dev, "index", None) is not None
+                else (getattr(dev, "path", None) or getattr(dev, "id", None))
+            )
+            return value, "serial_number"
+
+    for dev in devices:
+        if cam.device_id and _norm(getattr(dev, "id", None)) == _norm(cam.device_id):
+            value = (
+                getattr(dev, "index", None)
+                if getattr(dev, "index", None) is not None
+                else (getattr(dev, "path", None) or getattr(dev, "id", None))
+            )
+            return value, "device_id"
+
+    if cam.index is not None:
+        return cam.index, "saved index"
+    if cam.path:
+        return cam.path, "saved path"
+    if cam.serial_number:
+        return cam.serial_number, "saved serial"
+    if cam.device_id:
+        return cam.device_id, "saved device_id"
+    return None, None
+
+
+def _format_robot_cameras_arg(
+    follower: Robot,
+    devices: Iterable[object] | None = None,
+    resolve_index_from_container: Callable[[str], int | None] | None = None,
+) -> tuple[list[str], int | None, list[str]]:
+    """
+    Build the --robot.cameras argument using saved follower cameras.
+    Returns (args, suggested_loop_fps, notes).
+    """
+    if not follower.cameras:
+        return [], None, []
+
+    devices = list(devices or [])
+    notes: list[str] = []
+    target_fps_values: list[float] = []
+    entries: list[str] = []
+    seen: set[str] = set()
+
+    for cam in follower.cameras:
+        name = _slugify_camera_name(cam.name or "camera")
+        base = name
+        suffix = 1
+        while name in seen:
+            name = f"{base}_{suffix}"
+            suffix += 1
+        seen.add(name)
+
+        index_or_path, source = _resolve_camera_target(cam, devices, resolve_index_from_container)
+        if index_or_path is None:
+            notes.append(f"[panel] Skipped camera '{cam.name}' (no index/path resolved).")
+            continue
+
+        width = cam.width or DEFAULT_CAMERA_WIDTH
+        height = cam.height or DEFAULT_CAMERA_HEIGHT
+        fps = float(cam.fps or DEFAULT_CAMERA_FPS)
+
+        target_width = int(min(width, DEFAULT_CAMERA_WIDTH))
+        target_height = int(min(height, DEFAULT_CAMERA_HEIGHT))
+        target_fps = float(min(fps, DEFAULT_CAMERA_FPS))
+        target_fps_values.append(target_fps)
+
+        fps_rendered = int(target_fps) if target_fps.is_integer() else round(target_fps, 2)
+        parts = [
+            f"type: {cam.kind or 'opencv'}",
+            f"index_or_path: {index_or_path}",
+            f"width: {target_width}",
+            f"height: {target_height}",
+            f"fps: {fps_rendered}",
+        ]
+        if (cam.kind or "opencv").lower() == "opencv":
+            parts.append(f"fourcc: {DEFAULT_CAMERA_FOURCC}")
+
+        entries.append(f"{name}: {{ {', '.join(parts)} }}")
+        note_source = f"via {source}" if source else "from saved data"
+        notes.append(f"[panel] Camera '{cam.name}' -> {index_or_path} ({note_source}).")
+
+    if not entries:
+        return [], None, notes
+
+    cameras_value = f"{{{', '.join(entries)}}}"
+    loop_fps = int(min([DEFAULT_TELEOP_FPS, *[v for v in target_fps_values if v > 0]]))
+    args = [f"--robot.cameras={cameras_value}", "--display_data=true", f"--fps={loop_fps}"]
+    return args, loop_fps, notes
 
 
 def build_calibration_cmd(robot: Robot) -> list[str]:
@@ -71,7 +215,13 @@ def run_calibration(robot: Robot, *, dry_run: bool = False) -> Tuple[bool, str]:
     return False, f"Calibration command failed with code {result.returncode}."
 
 
-def build_teleop_cmd(leader: Robot, follower: Robot) -> list[str]:
+def build_teleop_cmd(
+    leader: Robot,
+    follower: Robot,
+    *,
+    camera_devices: Iterable[object] | None = None,
+    resolve_index_from_container: Callable[[str], int | None] | None = None,
+) -> tuple[list[str], list[str]]:
     args = [
         f"--robot.type={follower.device_type()}",
         f"--robot.port={follower.com_port}",
@@ -80,7 +230,12 @@ def build_teleop_cmd(leader: Robot, follower: Robot) -> list[str]:
         f"--teleop.port={leader.com_port}",
         f"--teleop.id={leader.name}",
     ]
+
+    camera_args, _, notes = _format_robot_cameras_arg(
+        follower, devices=camera_devices, resolve_index_from_container=resolve_index_from_container
+    )
+    args.extend(camera_args)
+
     entrypoint = _resolve_console_script("lerobot-teleoperate")
-    if entrypoint:
-        return [entrypoint, *args]
-    return [sys.executable, "-u", "-m", "lerobot.scripts.lerobot_teleoperate", *args]
+    cmd = [entrypoint, *args] if entrypoint else [sys.executable, "-u", "-m", "lerobot.scripts.lerobot_teleoperate", *args]
+    return cmd, notes
