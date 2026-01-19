@@ -6,6 +6,7 @@ import shlex
 import shutil
 import subprocess
 import sys
+import urllib.parse
 from pathlib import Path
 from typing import Callable, Dict, Iterable, Tuple
 
@@ -17,6 +18,8 @@ DEFAULT_CAMERA_HEIGHT = 720
 DEFAULT_CAMERA_FPS = 20.0
 DEFAULT_CAMERA_FOURCC = "MJPG"
 REALSENSE_KIND = "intelrealsense"
+# Default off: only embed shared stream URLs in teleop commands if explicitly enabled.
+PANEL_STREAM_CAMERAS = os.environ.get("LEROBOT_PANEL_STREAM_CAMERAS", "0").lower() not in ("0", "false", "no")
 
 
 def _find_repo_root() -> Path | None:
@@ -48,6 +51,34 @@ def _resolve_console_script(name: str) -> str | None:
 def _slugify_camera_name(name: str, *, fallback: str = "cam") -> str:
     cleaned = re.sub(r"[^A-Za-z0-9_-]+", "_", (name or "").strip().lower())
     return cleaned or fallback
+
+
+def _camera_stream_url(device_id: str, *, width: int | None, height: int | None, fps: float | None) -> str:
+    base = os.environ.get("LEROBOT_PANEL_API_BASE", "http://127.0.0.1:8000").rstrip("/")
+    params = []
+    if width:
+        params.append(f"width={int(width)}")
+    if height:
+        params.append(f"height={int(height)}")
+    if fps and fps > 0:
+        params.append(f"fps={fps}")
+    params.append("shared=true")
+    query = f"?{'&'.join(params)}" if params else ""
+    return f"{base}/cameras/{urllib.parse.quote(device_id)}/stream{query}"
+
+
+def _quote_identifier(value: object) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, (int, float)):
+        return str(value)
+    s = str(value)
+    if s == "":
+        return ""
+    if all(c.isalnum() or c in "._-" for c in s):
+        return s
+    escaped = s.replace('"', '\\"')
+    return f'"{escaped}"'
 
 
 def _resolve_camera_target(
@@ -151,17 +182,21 @@ def _format_robot_cameras_arg(
         if index_or_path is None:
             notes.append(f"[panel] Skipped camera '{cam.name}' (no index/path resolved).")
             continue
-
         width = int(cam.width or DEFAULT_CAMERA_WIDTH)
         height = int(cam.height or DEFAULT_CAMERA_HEIGHT)
         fps = float(cam.fps or DEFAULT_CAMERA_FPS)
         target_fps_values.append(fps)
+        stream_url = None
+        if PANEL_STREAM_CAMERAS and cam.device_id and kind == "opencv":
+            stream_url = _camera_stream_url(cam.device_id, width=width, height=height, fps=fps)
 
         fps_rendered = int(fps) if fps.is_integer() else round(fps, 2)
         identifier_key = "serial_number_or_name" if kind == REALSENSE_KIND else "index_or_path"
+        identifier_value = stream_url or index_or_path
+        identifier_value = _quote_identifier(identifier_value)
         parts = [
             f"type: {kind}",
-            f"{identifier_key}: {index_or_path}",
+            f"{identifier_key}: {identifier_value}",
             f"width: {width}",
             f"height: {height}",
             f"fps: {fps_rendered}",
@@ -171,7 +206,10 @@ def _format_robot_cameras_arg(
 
         entries.append(f"{name}: {{ {', '.join(parts)} }}")
         note_source = f"via {source}" if source else "from saved data"
-        notes.append(f"[panel] Camera '{cam.name}' -> {index_or_path} ({note_source}, type={kind}).")
+        if stream_url:
+            notes.append(f"[panel] Camera '{cam.name}' -> {stream_url} (shared stream).")
+        else:
+            notes.append(f"[panel] Camera '{cam.name}' -> {index_or_path} ({note_source}, type={kind}).")
 
     if not entries:
         return [], None, notes

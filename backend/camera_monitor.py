@@ -8,6 +8,8 @@ import threading
 import time
 from dataclasses import asdict, dataclass
 from typing import Dict, Iterator, List, Optional, Set, Tuple
+import queue
+import uuid
 
 POLL_SECONDS = 2.0
 # Probe in a user-friendly order: 480p, 720p, 1080p.
@@ -141,6 +143,7 @@ class CameraMonitor:
         self.max_indices = max_indices
         self._devices: Dict[str, CameraDevice] = {}
         self._lock = threading.Lock()
+        self._streams: Dict[str, "_SharedStream"] = {}
         self._stop = threading.Event()
         self._thread = threading.Thread(target=self._run, daemon=True)
 
@@ -193,11 +196,19 @@ class CameraMonitor:
         return self._capture_opencv_frame(device, width=width, height=height, fps=fps)
 
     def stream_frames(
-        self, device_id: str, width: Optional[int] = None, height: Optional[int] = None, fps: Optional[float] = None
+        self,
+        device_id: str,
+        width: Optional[int] = None,
+        height: Optional[int] = None,
+        fps: Optional[float] = None,
+        *,
+        shared: bool = False,
     ) -> Optional[Iterator[bytes]]:
         device = self.get(device_id)
         if not device:
             return None
+        if shared:
+            return self._stream_shared(device, width=width, height=height, fps=fps)
         if device.kind == "realsense":
             return self._stream_realsense_frames(device, width=width, height=height, fps=fps)
         return self._stream_opencv_frames(device, width=width, height=height, fps=fps)
@@ -738,6 +749,157 @@ class CameraMonitor:
 
         return generator()
 
+    def _stream_shared(
+        self, device: CameraDevice, width: Optional[int] = None, height: Optional[int] = None, fps: Optional[float] = None
+    ) -> Optional[Iterator[bytes]]:
+        """
+        Provide a shared reader so multiple clients reuse a single capture handle.
+        Each (device, width, height, fps) tuple gets its own reader.
+        """
+        key = self._stream_key(device.id, width, height, fps)
+        with self._lock:
+            stream = self._streams.get(key)
+            if not stream:
+                if device.kind == "realsense":
+                    stream = _SharedStream(self._shared_realsense_reader(device, width=width, height=height, fps=fps))
+                else:
+                    stream = _SharedStream(self._shared_opencv_reader(device, width=width, height=height, fps=fps))
+                stream.start()
+                self._streams[key] = stream
+            token, gen = stream.subscribe()
+
+            def cleanup():
+                # When the generator ends, unsubscribe and drop empty streams.
+                stream.unsubscribe(token)
+                with self._lock:
+                    if stream.is_empty() and key in self._streams:
+                        self._streams.pop(key, None)
+
+            def wrapper():
+                try:
+                    for frame in gen:
+                        yield frame
+                finally:
+                    cleanup()
+
+            return wrapper()
+
+    def _stream_key(self, device_id: str, width: Optional[int], height: Optional[int], fps: Optional[float]) -> str:
+        w = int(width) if width else 0
+        h = int(height) if height else 0
+        f = int(round(fps)) if fps else 0
+        return f"{device_id}:{w}:{h}:{f}"
+
+    def _shared_opencv_reader(
+        self, device: CameraDevice, width: Optional[int] = None, height: Optional[int] = None, fps: Optional[float] = None
+    ):
+        def iterator(stop: threading.Event):
+            cv2 = _import_cv2()
+            if cv2 is None:
+                return
+            cap = self._open_capture(device)
+            if not cap:
+                return
+            try:
+                if width and height:
+                    cap.set(cv2.CAP_PROP_FRAME_WIDTH, width)
+                    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
+                if fps and fps > 0:
+                    cap.set(cv2.CAP_PROP_FPS, fps)
+                self._force_mjpeg_last(cv2, cap)
+                for _ in range(2):
+                    cap.read()
+
+                target_fps = float(fps or cap.get(cv2.CAP_PROP_FPS) or 15.0)
+                if target_fps <= 0 or target_fps > 120:
+                    target_fps = 15.0
+                delay = max(0.01, 1.0 / target_fps)
+
+                misses = 0
+                while not stop.is_set():
+                    ok, frame = cap.read()
+                    if not ok or frame is None:
+                        misses += 1
+                        if misses > 10:
+                            break
+                        continue
+                    ok, buffer = cv2.imencode(".jpg", frame)
+                    if not ok:
+                        break
+                    yield buffer.tobytes()
+                    time.sleep(delay)
+            finally:
+                cap.release()
+
+        return iterator
+
+    def _shared_realsense_reader(
+        self, device: CameraDevice, width: Optional[int] = None, height: Optional[int] = None, fps: Optional[float] = None
+    ):
+        def iterator(stop: threading.Event):
+            try:
+                import pyrealsense2 as rs  # type: ignore
+                import cv2  # type: ignore
+                import numpy as np  # type: ignore
+            except Exception:
+                return
+
+            config = rs.config()
+            try:
+                serial = device.serial_number or device.path
+                if serial:
+                    config.enable_device(serial)
+            except Exception:
+                pass
+
+            w = width or (device.suggested.width if device.suggested else 640)
+            h = height or (device.suggested.height if device.suggested else 480)
+            target_fps = int(round(fps or (device.suggested.fps if device.suggested else 30)))
+            if target_fps <= 0 or target_fps > 120:
+                target_fps = 30
+
+            try:
+                config.enable_stream(rs.stream.color, w, h, rs.format.bgr8, target_fps)
+            except Exception:
+                return
+
+            pipeline = rs.pipeline()
+            try:
+                pipeline.start(config)
+                delay = max(0.01, 1.0 / float(target_fps))
+                misses = 0
+                while not stop.is_set():
+                    try:
+                        frames = pipeline.wait_for_frames(timeout_ms=2000)
+                    except Exception:
+                        misses += 1
+                        if misses > 8:
+                            break
+                        continue
+                    color = frames.get_color_frame()
+                    if not color:
+                        misses += 1
+                        if misses > 12:
+                            break
+                        continue
+                    misses = 0
+                    frame = color.get_data()
+                    if frame is None:
+                        continue
+                    img = np.asanyarray(frame)
+                    ok, buffer = cv2.imencode(".jpg", img)
+                    if not ok:
+                        break
+                    yield buffer.tobytes()
+                    time.sleep(delay)
+            finally:
+                try:
+                    pipeline.stop()
+                except Exception:
+                    pass
+
+        return iterator
+
     def _force_mjpeg_last(self, cv2, cap) -> None:
         """Request MJPEG; safe if ignored. Must be called AFTER setting width/height/fps."""
         try:
@@ -835,3 +997,86 @@ class CameraMonitor:
                 return cap
             cap.release()
         return None
+
+
+class _SharedStream:
+    """
+    Multiplex frames from a single reader to multiple subscribers.
+    """
+
+    def __init__(self, reader_factory):
+        self.reader_factory = reader_factory
+        self._subscribers: Dict[str, queue.Queue[Optional[bytes]]] = {}
+        self._stop = threading.Event()
+        self._thread = threading.Thread(target=self._run, daemon=True)
+        self._lock = threading.Lock()
+
+    def start(self) -> None:
+        if not self._thread.is_alive():
+            self._thread.start()
+
+    def subscribe(self) -> tuple[str, Iterator[bytes]]:
+        token = uuid.uuid4().hex
+        q: queue.Queue[Optional[bytes]] = queue.Queue(maxsize=8)
+        with self._lock:
+            self._subscribers[token] = q
+
+        def generator():
+            try:
+                while True:
+                    item = q.get()
+                    if item is None:
+                        break
+                    yield item
+            finally:
+                self.unsubscribe(token)
+
+        return token, generator()
+
+    def unsubscribe(self, token: str) -> None:
+        with self._lock:
+            q = self._subscribers.pop(token, None)
+            if q:
+                try:
+                    q.put_nowait(None)
+                except Exception:
+                    pass
+            if not self._subscribers:
+                self._stop.set()
+
+    def is_empty(self) -> bool:
+        with self._lock:
+            return not self._subscribers
+
+    def _broadcast(self, frame: bytes) -> None:
+        with self._lock:
+            dead: list[str] = []
+            for token, q in self._subscribers.items():
+                try:
+                    q.put_nowait(frame)
+                except queue.Full:
+                    # Drop frames if consumer is slower; keep stream alive.
+                    continue
+                except Exception:
+                    dead.append(token)
+            for token in dead:
+                self._subscribers.pop(token, None)
+
+    def _run(self) -> None:
+        try:
+            reader = self.reader_factory(self._stop)
+            if reader is None:
+                return
+            for frame in reader:
+                if self._stop.is_set():
+                    break
+                if frame:
+                    self._broadcast(frame)
+        finally:
+            with self._lock:
+                for q in self._subscribers.values():
+                    try:
+                        q.put_nowait(None)
+                    except Exception:
+                        pass
+                self._subscribers.clear()

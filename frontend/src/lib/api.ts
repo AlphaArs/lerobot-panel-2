@@ -147,12 +147,13 @@ export async function fetchCameraSnapshot(
 
 export function cameraStreamUrl(
   id: string,
-  opts: { width?: number; height?: number; fps?: number } = {}
+  opts: { width?: number; height?: number; fps?: number; shared?: boolean } = {}
 ): string {
   const params = new URLSearchParams();
   if (opts.width) params.set("width", String(opts.width));
   if (opts.height) params.set("height", String(opts.height));
   if (opts.fps) params.set("fps", String(opts.fps));
+  if (opts.shared !== false) params.set("shared", "true");
   const base = `${API_BASE}/cameras/${encodeURIComponent(id)}/stream`;
   const query = params.toString();
   return query ? `${base}?${query}` : base;

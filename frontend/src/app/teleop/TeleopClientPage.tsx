@@ -341,6 +341,15 @@ export default function TeleopPage() {
     const DEFAULT_HEIGHT = 720;
     const DEFAULT_FPS = 20;
 
+    const quote = (val: unknown) => {
+      if (val === null || val === undefined) return "";
+      if (typeof val === "number") return String(val);
+      const s = String(val);
+      if (s.length === 0) return "";
+      if (/^[A-Za-z0-9._-]+$/.test(s)) return s;
+      return `"${s.replace(/"/g, '\\"')}"`;
+    };
+
     const payload = follower.cameras.map((cam) => {
       const device = resolveCameraDevice(cam);
       const base = (cam.name || "camera").trim().toLowerCase().replace(/[^a-z0-9_-]+/g, "_") || "camera";
@@ -371,7 +380,7 @@ export default function TeleopPage() {
       const identifierKey = kind === "intelrealsense" ? "serial_number_or_name" : "index_or_path";
       const fourcc = kind === "opencv" ? ", fourcc: MJPG" : "";
 
-      return `${name}: {type: ${kind}, ${identifierKey}: ${identifier}, width: ${width}, height: ${height}, fps: ${fps}${fourcc ? fourcc.replace(/^, /, ", ") : ""}}`;
+      return `${name}: {type: ${kind}, ${identifierKey}: ${quote(identifier)}, width: ${width}, height: ${height}, fps: ${fps}${fourcc ? fourcc.replace(/^, /, ", ") : ""}}`;
     });
 
     return `{${payload.join(", ")}}`;

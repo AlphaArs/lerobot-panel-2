@@ -152,8 +152,9 @@ def camera_stream(
     width: int | None = None,
     height: int | None = None,
     fps: float | None = None,
+    shared: bool = True,
 ) -> StreamingResponse:
-    stream = camera_monitor.stream_frames(device_id, width=width, height=height, fps=fps)
+    stream = camera_monitor.stream_frames(device_id, width=width, height=height, fps=fps, shared=shared)
     if not stream:
         raise HTTPException(status_code=404, detail="Could not start camera stream.")
 
