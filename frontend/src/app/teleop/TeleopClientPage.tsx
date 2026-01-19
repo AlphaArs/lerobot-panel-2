@@ -352,22 +352,26 @@ export default function TeleopPage() {
       }
       seen.add(name);
 
-      const indexOrPath =
-        device?.index ??
-        device?.path ??
-        cam.container_id ??
-        cam.path ??
-        cam.device_id ??
-        cam.serial_number ??
-        "?";
+      const kindRaw = (cam.kind || "opencv").toLowerCase();
+      const kind = kindRaw === "realsense" || kindRaw === "intelrealsense" ? "intelrealsense" : "opencv";
+      const identifier =
+        kind === "intelrealsense"
+          ? device?.serial_number ?? cam.serial_number ?? device?.path ?? cam.path ?? cam.device_id ?? device?.id ?? "?"
+          : device?.index ??
+            device?.path ??
+            cam.container_id ??
+            cam.path ??
+            cam.device_id ??
+            cam.serial_number ??
+            "?";
       const width = cam.width || DEFAULT_WIDTH;
       const height = cam.height || DEFAULT_HEIGHT;
       const fpsRaw = cam.fps || DEFAULT_FPS;
       const fps = Number.isFinite(fpsRaw) ? Math.round(fpsRaw) : DEFAULT_FPS;
-      const kind = cam.kind || "opencv";
-      const fourcc = kind.toLowerCase() === "opencv" ? ", fourcc: MJPG" : "";
+      const identifierKey = kind === "intelrealsense" ? "serial_number_or_name" : "index_or_path";
+      const fourcc = kind === "opencv" ? ", fourcc: MJPG" : "";
 
-      return `${name}: {type: ${kind}, index_or_path: ${indexOrPath}, width: ${width}, height: ${height}, fps: ${fps}${fourcc ? fourcc.replace(/^, /, ", ") : ""}}`;
+      return `${name}: {type: ${kind}, ${identifierKey}: ${identifier}, width: ${width}, height: ${height}, fps: ${fps}${fourcc ? fourcc.replace(/^, /, ", ") : ""}}`;
     });
 
     return `{${payload.join(", ")}}`;

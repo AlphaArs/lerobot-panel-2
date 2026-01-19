@@ -16,6 +16,7 @@ DEFAULT_CAMERA_WIDTH = 1280
 DEFAULT_CAMERA_HEIGHT = 720
 DEFAULT_CAMERA_FPS = 20.0
 DEFAULT_CAMERA_FOURCC = "MJPG"
+REALSENSE_KIND = "intelrealsense"
 
 
 def _find_repo_root() -> Path | None:
@@ -135,6 +136,9 @@ def _format_robot_cameras_arg(
     seen: set[str] = set()
 
     for cam in follower.cameras:
+        raw_kind = (cam.kind or "opencv").strip().lower()
+        kind = REALSENSE_KIND if raw_kind in ("realsense", REALSENSE_KIND) else "opencv"
+
         name = _slugify_camera_name(cam.name or "camera")
         base = name
         suffix = 1
@@ -154,19 +158,20 @@ def _format_robot_cameras_arg(
         target_fps_values.append(fps)
 
         fps_rendered = int(fps) if fps.is_integer() else round(fps, 2)
+        identifier_key = "serial_number_or_name" if kind == REALSENSE_KIND else "index_or_path"
         parts = [
-            f"type: {cam.kind or 'opencv'}",
-            f"index_or_path: {index_or_path}",
+            f"type: {kind}",
+            f"{identifier_key}: {index_or_path}",
             f"width: {width}",
             f"height: {height}",
             f"fps: {fps_rendered}",
         ]
-        if (cam.kind or "opencv").lower() == "opencv":
+        if kind == "opencv":
             parts.append(f"fourcc: {DEFAULT_CAMERA_FOURCC}")
 
         entries.append(f"{name}: {{ {', '.join(parts)} }}")
         note_source = f"via {source}" if source else "from saved data"
-        notes.append(f"[panel] Camera '{cam.name}' -> {index_or_path} ({note_source}).")
+        notes.append(f"[panel] Camera '{cam.name}' -> {index_or_path} ({note_source}, type={kind}).")
 
     if not entries:
         return [], None, notes

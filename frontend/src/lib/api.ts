@@ -145,6 +145,19 @@ export async function fetchCameraSnapshot(
   return res.blob();
 }
 
+export function cameraStreamUrl(
+  id: string,
+  opts: { width?: number; height?: number; fps?: number } = {}
+): string {
+  const params = new URLSearchParams();
+  if (opts.width) params.set("width", String(opts.width));
+  if (opts.height) params.set("height", String(opts.height));
+  if (opts.fps) params.set("fps", String(opts.fps));
+  const base = `${API_BASE}/cameras/${encodeURIComponent(id)}/stream`;
+  const query = params.toString();
+  return query ? `${base}?${query}` : base;
+}
+
 export function createRobot(payload: {
   name: string;
   model: RobotModel;

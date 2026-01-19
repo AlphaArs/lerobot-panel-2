@@ -7,7 +7,7 @@ import subprocess
 import threading
 import time
 from dataclasses import asdict, dataclass
-from typing import Dict, List, Optional, Set, Tuple
+from typing import Dict, Iterator, List, Optional, Set, Tuple
 
 POLL_SECONDS = 2.0
 # Probe in a user-friendly order: 480p, 720p, 1080p.
@@ -191,6 +191,16 @@ class CameraMonitor:
         if device.kind == "realsense":
             return self._capture_realsense_frame(device, width=width, height=height, fps=fps)
         return self._capture_opencv_frame(device, width=width, height=height, fps=fps)
+
+    def stream_frames(
+        self, device_id: str, width: Optional[int] = None, height: Optional[int] = None, fps: Optional[float] = None
+    ) -> Optional[Iterator[bytes]]:
+        device = self.get(device_id)
+        if not device:
+            return None
+        if device.kind == "realsense":
+            return self._stream_realsense_frames(device, width=width, height=height, fps=fps)
+        return self._stream_opencv_frames(device, width=width, height=height, fps=fps)
 
     def _run(self) -> None:
         while not self._stop.is_set():
@@ -561,6 +571,55 @@ class CameraMonitor:
         finally:
             cap.release()
 
+    def _stream_opencv_frames(
+        self, device: CameraDevice, width: Optional[int] = None, height: Optional[int] = None, fps: Optional[float] = None
+    ) -> Optional[Iterator[bytes]]:
+        cv2 = _import_cv2()
+        if cv2 is None:
+            return None
+
+        cap = self._open_capture(device)
+        if not cap:
+            return None
+
+        def generator():
+            try:
+                if width and height:
+                    cap.set(cv2.CAP_PROP_FRAME_WIDTH, width)
+                    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
+                if fps and fps > 0:
+                    cap.set(cv2.CAP_PROP_FPS, fps)
+
+                # Favor MJPEG for better latency and smaller payloads.
+                self._force_mjpeg_last(cv2, cap)
+
+                for _ in range(2):
+                    cap.read()
+
+                target_fps = float(fps or cap.get(cv2.CAP_PROP_FPS) or 15.0)
+                if target_fps <= 0 or target_fps > 120:
+                    target_fps = 15.0
+                delay = max(0.01, 1.0 / target_fps)
+
+                misses = 0
+                while True:
+                    ok, frame = cap.read()
+                    if not ok or frame is None:
+                        misses += 1
+                        if misses > 10:
+                            break
+                        continue
+
+                    ok, buffer = cv2.imencode(".jpg", frame)
+                    if not ok:
+                        break
+                    yield buffer.tobytes()
+                    time.sleep(delay)
+            finally:
+                cap.release()
+
+        return generator()
+
     def _capture_realsense_frame(
         self, device: CameraDevice, width: Optional[int] = None, height: Optional[int] = None, fps: Optional[float] = None
     ) -> Optional[bytes]:
@@ -611,6 +670,73 @@ class CameraMonitor:
                 pipeline.stop()
             except Exception:
                 pass
+
+    def _stream_realsense_frames(
+        self, device: CameraDevice, width: Optional[int] = None, height: Optional[int] = None, fps: Optional[float] = None
+    ) -> Optional[Iterator[bytes]]:
+        try:
+            import pyrealsense2 as rs  # type: ignore
+            import cv2  # type: ignore
+            import numpy as np  # type: ignore
+        except Exception:
+            return None
+
+        def generator():
+            config = rs.config()
+            try:
+                serial = device.serial_number or device.path
+                if serial:
+                    config.enable_device(serial)
+            except Exception:
+                pass
+
+            w = width or (device.suggested.width if device.suggested else 640)
+            h = height or (device.suggested.height if device.suggested else 480)
+            target_fps = int(round(fps or (device.suggested.fps if device.suggested else 30)))
+            if target_fps <= 0 or target_fps > 120:
+                target_fps = 30
+
+            try:
+                config.enable_stream(rs.stream.color, w, h, rs.format.bgr8, target_fps)
+            except Exception:
+                return
+
+            pipeline = rs.pipeline()
+            try:
+                pipeline.start(config)
+                delay = max(0.01, 1.0 / float(target_fps))
+                misses = 0
+                while True:
+                    try:
+                        frames = pipeline.wait_for_frames(timeout_ms=2000)
+                    except Exception:
+                        misses += 1
+                        if misses > 8:
+                            break
+                        continue
+                    color = frames.get_color_frame()
+                    if not color:
+                        misses += 1
+                        if misses > 12:
+                            break
+                        continue
+                    misses = 0
+                    frame = color.get_data()
+                    if frame is None:
+                        continue
+                    img = np.asanyarray(frame)
+                    ok, buffer = cv2.imencode(".jpg", img)
+                    if not ok:
+                        break
+                    yield buffer.tobytes()
+                    time.sleep(delay)
+            finally:
+                try:
+                    pipeline.stop()
+                except Exception:
+                    pass
+
+        return generator()
 
     def _force_mjpeg_last(self, cv2, cap) -> None:
         """Request MJPEG; safe if ignored. Must be called AFTER setting width/height/fps."""

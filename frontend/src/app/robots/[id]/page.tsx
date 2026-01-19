@@ -18,6 +18,7 @@ import {
   probeCameraDevice,
   robotsWsUrl,
   camerasWsUrl,
+  cameraStreamUrl,
   updateRobot,
 } from "@/lib/api";
 import { Button, Notice, Panel, Pill, Spacer, Stack, Tag } from "../../ui";
@@ -33,6 +34,8 @@ const defaultCameraForm = {
   path: "",
   container_id: "",
 } as const;
+
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 export default function RobotDetailPage() {
   const params = useParams();
@@ -55,15 +58,26 @@ export default function RobotDetailPage() {
   const [cameraProbe, setCameraProbe] = useState<CameraProbe | null>(null);
   const [selectedCameraId, setSelectedCameraId] = useState("");
   const [cameraForm, setCameraForm] = useState(defaultCameraForm);
-  const [cameraPreviewUrl, setCameraPreviewUrl] = useState<string | null>(null);
-  const [cameraPreviewLoading, setCameraPreviewLoading] = useState(false);
   const [showAddCameraModal, setShowAddCameraModal] = useState(false);
   const [savingCamera, setSavingCamera] = useState(false);
   const [probingCamera, setProbingCamera] = useState(false);
   const [cameraValidation, setCameraValidation] = useState<string | null>(null);
-  const [autoPreview, setAutoPreview] = useState(false);
-  const [previewFailures, setPreviewFailures] = useState(0);
-  const previewTokenRef = useRef(0);
+  const [cameraStreamError, setCameraStreamError] = useState<string | null>(null);
+  const [streamVersion, setStreamVersion] = useState(0);
+  const [streamPaused, setStreamPaused] = useState(false);
+  const [pausedFrameUrl, setPausedFrameUrl] = useState<string | null>(null);
+  const [streamParams, setStreamParams] = useState<{ width?: number; height?: number; fps?: number } | null>(null);
+  const [lastDisplaySrc, setLastDisplaySrc] = useState<string | null>(null);
+
+  const resumeStream = useCallback(() => {
+    setStreamPaused(false);
+    setCameraStreamError(null);
+    setStreamVersion((v) => v + 1);
+    setPausedFrameUrl((prev) => {
+      if (prev) URL.revokeObjectURL(prev);
+      return null;
+    });
+  }, []);
   const [probeProgress, setProbeProgress] = useState(0);
   const probeResetRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const probeStepTimersRef = useRef<ReturnType<typeof setTimeout>[]>([]);
@@ -229,14 +243,6 @@ export default function RobotDetailPage() {
   }, [filteredCameraDevices, selectedCameraId, showAddCameraModal]);
 
   useEffect(() => {
-    return () => {
-      if (cameraPreviewUrl) {
-        URL.revokeObjectURL(cameraPreviewUrl);
-      }
-    };
-  }, [cameraPreviewUrl]);
-
-  useEffect(() => {
     if (showAddCameraModal) return;
     setCameraProbe(null);
     setSelectedCameraId("");
@@ -245,15 +251,22 @@ export default function RobotDetailPage() {
     clearProbeReset();
     setProbeProgress(0);
     setPresetsReady(false);
-    if (cameraPreviewUrl) {
-      URL.revokeObjectURL(cameraPreviewUrl);
-      setCameraPreviewUrl(null);
-    }
-  }, [showAddCameraModal, cameraPreviewUrl]);
+    setCameraStreamError(null);
+    setStreamPaused(false);
+    setStreamParams(null);
+    setPausedFrameUrl((prev) => {
+      if (prev) URL.revokeObjectURL(prev);
+      return null;
+    });
+  }, [showAddCameraModal]);
 
   useEffect(() => {
     return () => {
       clearProbeReset();
+      setPausedFrameUrl((prev) => {
+        if (prev) URL.revokeObjectURL(prev);
+        return null;
+      });
     };
   }, []);
 
@@ -335,6 +348,57 @@ export default function RobotDetailPage() {
         (!!numericFps ? Math.abs(m.fps - numericFps) <= 1.5 : true)
     );
   const suggestedMode = cameraProbe?.suggested || cameraProbe?.modes?.[0];
+  const streamQuery = useMemo(() => {
+    if (streamParams) return streamParams;
+    if (suggestedMode) {
+      return {
+        width: suggestedMode.width,
+        height: suggestedMode.height,
+        fps: Math.round(suggestedMode.fps),
+      };
+    }
+    return {};
+  }, [streamParams, suggestedMode?.width, suggestedMode?.height, suggestedMode?.fps]);
+  const cameraStreamSrc = useMemo(() => {
+    if (!selectedCameraId || streamPaused) return null;
+    const base = cameraStreamUrl(selectedCameraId, streamQuery);
+    return streamVersion ? `${base}${base.includes("?") ? "&" : "?"}v=${streamVersion}` : base;
+  }, [
+    selectedCameraId,
+    streamVersion,
+    streamPaused,
+    streamQuery,
+  ]);
+  const displayStreamSrc = useMemo(() => {
+    if (pausedFrameUrl) return pausedFrameUrl;
+    if (!streamPaused) return cameraStreamSrc || lastDisplaySrc;
+    if (lastDisplaySrc && lastDisplaySrc.startsWith("blob:")) return lastDisplaySrc;
+    return null;
+  }, [pausedFrameUrl, cameraStreamSrc, lastDisplaySrc, streamPaused]);
+
+  const capturePausedFrame = useCallback(async () => {
+    if (!selectedCameraId) return false;
+    try {
+      const blob = await fetchCameraSnapshot(selectedCameraId, {
+        width: streamQuery.width || numericWidth || undefined,
+        height: streamQuery.height || numericHeight || undefined,
+        fps: streamQuery.fps || numericFps || undefined,
+      });
+      const url = URL.createObjectURL(blob);
+      setPausedFrameUrl((prev) => {
+        if (prev) URL.revokeObjectURL(prev);
+        return url;
+      });
+      setLastDisplaySrc(url);
+      return true;
+    } catch {
+      return false;
+    }
+  }, [selectedCameraId, streamQuery.width, streamQuery.height, streamQuery.fps, numericWidth, numericHeight, numericFps]);
+
+  useEffect(() => {
+    setCameraStreamError(null);
+  }, [cameraStreamSrc]);
 
   const clearProbeReset = () => {
     if (probeResetRef.current) {
@@ -364,17 +428,18 @@ export default function RobotDetailPage() {
     setCameraForm(defaultCameraForm);
     setCameraProbe(null);
     setCameraValidation(null);
-    setAutoPreview(false);
     setPresetsReady(false);
     if (cameraDevices.length === 0) {
       void fetchCameras()
         .then((list) => setCameraDevices(list))
         .catch(() => null);
     }
-    if (cameraPreviewUrl) {
-      URL.revokeObjectURL(cameraPreviewUrl);
-      setCameraPreviewUrl(null);
-    }
+    setCameraStreamError(null);
+    setStreamPaused(false);
+    setPausedFrameUrl((prev) => {
+      if (prev) URL.revokeObjectURL(prev);
+      return null;
+    });
     clearProbeReset();
     clearProbeSteps();
     setProbeProgress(0);
@@ -385,21 +450,17 @@ export default function RobotDetailPage() {
   };
 
   const handleSelectCamera = async (cameraId: string) => {
-    const prevSelected = selectedCameraId;
-    previewTokenRef.current += 1;
     setSelectedCameraId(cameraId);
     setCameraProbe(null);
     setCameraValidation(null);
-    setCameraPreviewUrl(null);
     setPresetsReady(false);
     clearProbeReset();
     clearProbeSteps();
     setProbeProgress(0);
     setShowPresets(false);
-    setAutoPreview(false);
-    if (cameraPreviewUrl) {
-      URL.revokeObjectURL(cameraPreviewUrl);
-    }
+    setCameraStreamError(null);
+    setStreamParams(null);
+    resumeStream();
     if (!cameraId) return;
     setCameraForm({
       name: "",
@@ -410,7 +471,6 @@ export default function RobotDetailPage() {
       path: "",
       container_id: "",
     });
-    void refreshPreview(cameraId, undefined, { fastOnly: true, force: true }, previewTokenRef.current);
   };
 
   const handleDetectCamera = async () => {
@@ -418,12 +478,23 @@ export default function RobotDetailPage() {
       setCameraValidation("Pick a camera first.");
       return;
     }
-    const prevSelected = selectedCameraId;
     clearProbeReset();
     clearProbeSteps();
     setPresetsReady(false);
     setProbeProgress(10);
     setProbingCamera(true);
+    setCameraStreamError(null);
+    setStreamPaused(true);
+    setLastDisplaySrc((prev) => (prev && prev.startsWith("blob:") ? prev : null));
+    setStreamVersion((v) => v + 1);
+    await sleep(220);
+    const grabbed = await capturePausedFrame();
+    if (!grabbed) {
+      // Try once more quickly if the first grab failed
+      await sleep(160);
+      await capturePausedFrame();
+    }
+    await sleep(100);
     scheduleProbeSteps(60_000);
     let probeSucceeded = false;
     let timedOut = false;
@@ -434,9 +505,22 @@ export default function RobotDetailPage() {
       setProbingCamera(false);
       setProbeProgress(0);
       clearProbeSteps();
+      resumeStream();
     }, timeoutMs);
     try {
-      const probe = await probeCameraDevice(selectedCameraId);
+      let probe;
+      for (let attempt = 0; attempt < 2; attempt += 1) {
+        try {
+          probe = await probeCameraDevice(selectedCameraId);
+          break;
+        } catch (err) {
+          if (timedOut || attempt === 1) throw err;
+          await sleep(250);
+        }
+      }
+      if (timedOut || !probe) {
+        return;
+      }
       if (timedOut) {
         return;
       }
@@ -444,6 +528,13 @@ export default function RobotDetailPage() {
       setProbeProgress(50);
       probeSucceeded = true;
       const best = probe.suggested || probe.modes[0];
+      if (best) {
+        setStreamParams({
+          width: best.width,
+          height: best.height,
+          fps: Math.round(best.fps),
+        });
+      }
       setCameraForm((form) => ({
         ...form,
         width: best?.width?.toString() || form.width,
@@ -454,22 +545,10 @@ export default function RobotDetailPage() {
         container_id: probe.device.container_id || form.container_id,
       }));
       if (best) {
-        const done = await refreshPreview(
-          selectedCameraId,
-          best,
-          {
-            fastOnly: true,
-            force: true,
-            onProgress: (v) => setProbeProgress((prev) => Math.max(prev, v)),
-          },
-          previewTokenRef.current
-        );
-        if (done) {
-          setProbeProgress(100);
-          probeResetRef.current = setTimeout(() => setProbeProgress(0), 800);
-        }
+        setProbeProgress(100);
+        probeResetRef.current = setTimeout(() => setProbeProgress(0), 800);
+        setCameraStreamError(null);
       }
-      setAutoPreview(false);
       setCameraValidation(null);
     } catch (err) {
       setCameraValidation(toMessage(err));
@@ -481,110 +560,9 @@ export default function RobotDetailPage() {
         setPresetsReady(true);
       }
       setProbingCamera(false);
+      resumeStream();
     }
   };
-
-  const refreshPreview = useCallback(
-    async (
-      deviceId?: string,
-      modeOverride?: { width?: number; height?: number; fps?: number },
-      options?: { fastOnly?: boolean; force?: boolean; onProgress?: (value: number) => void },
-      token?: number
-    ) => {
-      const activeToken = token ?? previewTokenRef.current;
-      const target = deviceId || selectedCameraId;
-      if (!target) return false;
-      if (cameraPreviewLoading && !options?.force) return null;
-      setCameraPreviewLoading(true);
-      try {
-        options?.onProgress?.(70);
-        const attempt = async (opts?: { width?: number; height?: number; fps?: number }) => {
-          const blob = await fetchCameraSnapshot(target, opts || {});
-          const url = URL.createObjectURL(blob);
-          if (activeToken === previewTokenRef.current) {
-            setCameraPreviewUrl((prev) => {
-              if (prev) URL.revokeObjectURL(prev);
-              return url;
-            });
-          } else {
-            URL.revokeObjectURL(url);
-          }
-        };
-
-        const baseWidth = (modeOverride?.width ?? numericWidth) || 640;
-        const baseHeight = (modeOverride?.height ?? numericHeight) || 480;
-        const baseFps = (modeOverride?.fps ?? numericFps) || 30;
-        const quickMode = {
-          width: Math.max(160, Math.min(baseWidth, 640)),
-          height: Math.max(120, Math.min(baseHeight, 480)),
-          fps: Math.max(5, Math.min(baseFps, 15)),
-        };
-
-        // Quick preview first
-        await attempt(quickMode);
-        options?.onProgress?.(85);
-        setPreviewFailures(0);
-        if (options?.fastOnly) {
-          return true;
-        }
-
-        const targetMode = {
-          width: modeOverride?.width ?? cameraForm.width,
-          height: modeOverride?.height ?? cameraForm.height,
-          fps: modeOverride?.fps ?? cameraForm.fps,
-        };
-
-        // If the target matches quick, skip the second fetch
-        const sameAsQuick =
-          (!!targetMode.width && targetMode.width <= quickMode.width) &&
-          (!!targetMode.height && targetMode.height <= quickMode.height) &&
-          (!!targetMode.fps && targetMode.fps <= quickMode.fps + 0.1);
-
-        if (!sameAsQuick && (targetMode.width || targetMode.height || targetMode.fps)) {
-          try {
-            await attempt(targetMode);
-            options?.onProgress?.(100);
-          } catch {
-            // Ignore target failures; keep the quick frame
-          }
-        } else {
-          options?.onProgress?.(100);
-        }
-        return true;
-      } catch {
-        setPreviewFailures((n) => n + 1);
-        options?.onProgress?.(0);
-        return false;
-      } finally {
-        setCameraPreviewLoading(false);
-      }
-    },
-    [cameraForm.height, cameraForm.width, cameraForm.fps, cameraPreviewLoading, selectedCameraId]
-  );
-
-  useEffect(() => {
-    if (!showAddCameraModal || !selectedCameraId || !autoPreview) return;
-    let stopped = false;
-
-    const tick = async () => {
-      if (stopped) return;
-      const ok = await refreshPreview(undefined, undefined, { fastOnly: true }, previewTokenRef.current);
-      if (ok === false && !stopped) {
-        setAutoPreview(false);
-      }
-    };
-
-    // Initial quick preview
-    void tick();
-    const timer = setInterval(() => {
-      void tick();
-    }, 1500);
-
-    return () => {
-      stopped = true;
-      clearInterval(timer);
-    };
-  }, [showAddCameraModal, selectedCameraId, autoPreview, refreshPreview]);
 
   const handleSaveCamera = async () => {
     if (!robot) return;
@@ -896,7 +874,7 @@ export default function RobotDetailPage() {
                   {filteredCameraDevices.map((dev) => (
                     <option key={dev.id} value={dev.id}>
                       {dev.label}
-                      {labelCounts[dev.label] > 1 ? ` • ${dev.id.slice(-6)}` : ""}
+                      {labelCounts[dev.label] > 1 ? ` - ${dev.id.slice(-6)}` : ""}
                       {dev.serial_number ? ` (SN ${dev.serial_number})` : ""}
                       {" "}
                       [{dev.kind}]
@@ -978,45 +956,69 @@ export default function RobotDetailPage() {
               </Stack>
               <div className="flex flex-col gap-3">
                 <div className="min-h-[220px] rounded-soft border border-border bg-panel p-3">
-                  {cameraPreviewUrl ? (
-                    <img src={cameraPreviewUrl} alt="Camera preview" className="h-48 w-full rounded-xl object-cover" />
+                  {selectedCameraId ? (
+                    <div className="relative h-48 w-full overflow-hidden rounded-xl bg-black/40">
+                      {displayStreamSrc ? (
+                        <img
+                          src={displayStreamSrc}
+                          alt="Camera stream"
+                          className={`h-full w-full object-cover ${probingCamera ? "blur-sm brightness-90" : ""}`}
+                          onLoad={(e) => {
+                            setCameraStreamError(null);
+                            setLastDisplaySrc(e.currentTarget.src);
+                          }}
+                          onError={() => setCameraStreamError("Unable to load live stream.")}
+                        />
+                      ) : (
+                        <div className="grid h-full place-items-center text-sm text-muted">
+                          {probingCamera ? "Pausing stream for detection..." : "Preparing stream..."}
+                        </div>
+                      )}
+                      {probingCamera && (
+                        <div className="absolute inset-0 grid place-items-center bg-black/60 backdrop-blur-sm px-3 text-center text-sm text-foreground">
+                          <div className="flex items-center gap-3 rounded-lg bg-panel/80 px-3 py-2">
+                            <div className="h-5 w-5 animate-spin rounded-full border-2 border-border border-t-accent" />
+                            <div className="text-left leading-tight">
+                              <div className="font-semibold text-foreground">Detecting camera specs...</div>
+                              <div className="text-xs text-muted">Stream paused temporarily.</div>
+                            </div>
+                          </div>
+                        </div>
+                      )}
+                      {cameraStreamError && (
+                        <div className="absolute inset-0 grid place-items-center bg-panel/80 px-3 text-center text-sm text-danger">
+                          {cameraStreamError}
+                        </div>
+                      )}
+                    </div>
                   ) : (
                     <div className="grid h-full place-items-center text-sm text-muted">
-                      {selectedCameraId
-                        ? cameraPreviewLoading
-                          ? "Preview loading..."
-                          : "Preview"
-                        : "Select a camera to preview it."}
+                      Select a camera to start streaming.
                     </div>
                   )}
                 </div>
-                <div className="flex items-center gap-2">
-                  <Button
-                    variant="ghost"
-                    onClick={() => void refreshPreview()}
-                    disabled={!selectedCameraId || cameraPreviewLoading}
-                  >
-                    {cameraPreviewLoading ? "Loading preview..." : "Refresh preview"}
-                  </Button>
-                </div>
-                <div className="flex items-center gap-2 text-xs text-muted">
-                  <input
-                    id="auto-preview"
-                    type="checkbox"
-                    className="size-4 accent-accent"
-                    checked={autoPreview}
-                    onChange={(e) => {
-                      setPreviewFailures(0);
-                      setAutoPreview(e.target.checked);
-                    }}
-                  />
-                  <label htmlFor="auto-preview" className="cursor-pointer select-none">
-                    Live preview (updates every ~1.5s)
-                  </label>
-                  {previewFailures >= 3 && (
-                    <span className="text-danger">Preview paused after repeated errors. Click refresh.</span>
-                  )}
-                </div>
+                {selectedCameraId && (
+                  <div className="flex flex-wrap items-center gap-2 text-sm">
+                    <Button
+                      variant="ghost"
+                      onClick={() => {
+                        resumeStream();
+                        setPausedFrameUrl((prev) => {
+                          if (prev) URL.revokeObjectURL(prev);
+                          return null;
+                        });
+                      }}
+                    >
+                      Restart stream
+                    </Button>
+                    {streamPaused && <span className="text-muted">Stream paused during detection.</span>}
+                    {cameraStreamError ? (
+                      <span className="text-danger">{cameraStreamError}</span>
+                    ) : (
+                      <span className="text-muted">Live MJPEG stream</span>
+                    )}
+                  </div>
+                )}
                 <div className="rounded-xl border border-border bg-panel p-3 text-sm text-muted">
                   <div className="mb-2 text-xs font-semibold text-muted">Suggested mode</div>
                   {suggestedMode ? (
@@ -1046,7 +1048,7 @@ export default function RobotDetailPage() {
                 </button>
                 {showPresets && (
                   <div className="space-y-3 rounded-lg border border-border bg-panel/60 p-3 w-full">
-                    <div className="text-[11px] uppercase tracking-wide text-muted w-full text-left">480p · 720p · 1080p</div>
+                    <div className="text-[11px] uppercase tracking-wide text-muted w-full text-left">480p / 720p / 1080p</div>
                     <div className="text-xs text-muted">
                       This is optional. Use these only if you need exact resolution/FPS combos.
                     </div>
@@ -1064,7 +1066,6 @@ export default function RobotDetailPage() {
                                   (!!numericWidth ? group.width === numericWidth : false) &&
                                   (!!numericHeight ? group.height === numericHeight : false) &&
                                   (!!numericFps ? Math.abs(fps - numericFps) <= 1.5 : false);
-                                const mode = { width: group.width, height: group.height, fps };
                                 return (
                                   <button
                                     key={`${group.label}-${fps}`}
@@ -1078,7 +1079,7 @@ export default function RobotDetailPage() {
                                         height: group.height.toString(),
                                         fps: fps.toString(),
                                       }));
-                                      void refreshPreview(selectedCameraId, mode);
+                                      setCameraStreamError(null);
                                     }}
                                     type="button"
                                   >

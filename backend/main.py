@@ -10,6 +10,7 @@ from typing import List
 
 from fastapi import FastAPI, HTTPException, Response, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 
 from .calibration_manager import CalibrationManager
 from .camera_monitor import CameraMonitor
@@ -143,6 +144,41 @@ def camera_snapshot(
     if not data:
         raise HTTPException(status_code=404, detail="Could not capture preview from this camera.")
     return Response(content=data, media_type="image/jpeg")
+
+
+@app.get("/cameras/{device_id}/stream")
+def camera_stream(
+    device_id: str,
+    width: int | None = None,
+    height: int | None = None,
+    fps: float | None = None,
+) -> StreamingResponse:
+    stream = camera_monitor.stream_frames(device_id, width=width, height=height, fps=fps)
+    if not stream:
+        raise HTTPException(status_code=404, detail="Could not start camera stream.")
+
+    boundary = "frame"
+
+    def generate():
+        boundary_bytes = boundary.encode()
+        try:
+            for frame in stream:
+                if not frame:
+                    continue
+                yield (
+                    b"--"
+                    + boundary_bytes
+                    + b"\r\nContent-Type: image/jpeg\r\n"
+                    + f"Content-Length: {len(frame)}\r\n\r\n".encode()
+                    + frame
+                    + b"\r\n"
+                )
+        except GeneratorExit:
+            return
+        except Exception:
+            return
+
+    return StreamingResponse(generate(), media_type=f"multipart/x-mixed-replace; boundary={boundary}")
 
 
 @app.get("/robots", response_model=List[Robot])
