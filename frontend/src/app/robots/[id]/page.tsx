@@ -22,6 +22,9 @@ import {
   updateRobot,
 } from "@/lib/api";
 import { Button, Notice, Panel, Pill, Spacer, Stack, Tag } from "../../ui";
+import { Field } from "../../components/Field";
+import { ModalActions } from "../../components/ModalActions";
+import { InlineButton } from "../../components/InlineButton";
 
 const toMessage = (err: unknown) => (err instanceof Error ? err.message : "Request failed");
 
@@ -868,32 +871,31 @@ export default function RobotDetailPage() {
             {cameraValidation && <span className="text-sm text-danger">{cameraValidation}</span>}
             <div className="grid gap-4 md:grid-cols-2">
               <Stack className="gap-3 w-full">
-                <label>Detected cameras</label>
-                <select value={selectedCameraId} onChange={(e) => void handleSelectCamera(e.target.value)}>
-                  <option value="">Pick a camera</option>
-                  {filteredCameraDevices.map((dev) => (
-                    <option key={dev.id} value={dev.id}>
-                      {dev.label}
-                      {labelCounts[dev.label] > 1 ? ` - ${dev.id.slice(-6)}` : ""}
-                      {dev.serial_number ? ` (SN ${dev.serial_number})` : ""}
-                      {" "}
-                      [{dev.kind}]
-                    </option>
-                  ))}
-                </select>
-                <Stack>
-                  <label>Camera name</label>
+                <Field label="Detected cameras" className="gap-2 w-full">
+                  <select value={selectedCameraId} onChange={(e) => void handleSelectCamera(e.target.value)}>
+                    <option value="">Pick a camera</option>
+                    {filteredCameraDevices.map((dev) => (
+                      <option key={dev.id} value={dev.id}>
+                        {dev.label}
+                        {labelCounts[dev.label] > 1 ? ` - ${dev.id.slice(-6)}` : ""}
+                        {dev.serial_number ? ` (SN ${dev.serial_number})` : ""}
+                        {" "}
+                        [{dev.kind}]
+                      </option>
+                    ))}
+                  </select>
+                </Field>
+                <Field label="Camera name" className="gap-2">
                   <input
                     value={cameraForm.name}
                     onChange={(e) => setCameraForm((form) => ({ ...form, name: e.target.value }))}
                     placeholder="Front camera"
                   />
-                </Stack>
+                </Field>
                 {currentDevice?.serial_number && (
-                  <Stack>
-                    <label>Serial number</label>
+                  <Field label="Serial number" className="gap-2">
                     <input value={currentDevice.serial_number} readOnly />
-                  </Stack>
+                  </Field>
                 )}
                 <div className="flex items-center gap-2">
                   <Button
@@ -921,31 +923,33 @@ export default function RobotDetailPage() {
                 )}
                 {selectedCameraId && (
                   <div className="space-y-3 w-full">
-                    <label>Resolution</label>
-                    <div className="grid grid-cols-2 gap-2">
+                    <Field label="Resolution" className="space-y-3 w-full">
+                      <div className="grid grid-cols-2 gap-2">
+                        <input
+                          type="number"
+                          value={cameraForm.width}
+                          min={1}
+                          onChange={(e) => setCameraForm((form) => ({ ...form, width: e.target.value }))}
+                          placeholder="Width"
+                        />
+                        <input
+                          type="number"
+                          value={cameraForm.height}
+                          min={1}
+                          onChange={(e) => setCameraForm((form) => ({ ...form, height: e.target.value }))}
+                          placeholder="Height"
+                        />
+                      </div>
+                    </Field>
+                    <Field label="FPS" className="gap-2">
                       <input
                         type="number"
-                        value={cameraForm.width}
+                        value={cameraForm.fps}
                         min={1}
-                        onChange={(e) => setCameraForm((form) => ({ ...form, width: e.target.value }))}
-                        placeholder="Width"
+                        onChange={(e) => setCameraForm((form) => ({ ...form, fps: e.target.value }))}
+                        placeholder="FPS"
                       />
-                      <input
-                        type="number"
-                        value={cameraForm.height}
-                        min={1}
-                        onChange={(e) => setCameraForm((form) => ({ ...form, height: e.target.value }))}
-                        placeholder="Height"
-                      />
-                    </div>
-                    <label>FPS</label>
-                    <input
-                      type="number"
-                      value={cameraForm.fps}
-                      min={1}
-                      onChange={(e) => setCameraForm((form) => ({ ...form, fps: e.target.value }))}
-                      placeholder="FPS"
-                    />
+                    </Field>
                     {!isModeSupported && (
                       <Notice className="text-sm text-danger">
                         This camera did not report support for that FPS/resolution.
@@ -1038,14 +1042,14 @@ export default function RobotDetailPage() {
             <div className="h-px bg-border" />
             {selectedCameraId && presetsReady && supportedGrouped.some((g) => g.fps.length > 0) && (
               <div className="w-full space-y-2">
-                <button
+                <InlineButton
                   className="flex w-full items-center justify-between rounded-lg border border-border bg-panel px-3 py-2 text-xs font-semibold text-muted"
-                  type="button"
                   onClick={() => setShowPresets((v) => !v)}
+                  active={showPresets}
                 >
                   <span>Optional presets (advanced)</span>
                   <span>{showPresets ? "Hide" : "Show"}</span>
-                </button>
+                </InlineButton>
                 {showPresets && (
                   <div className="space-y-3 rounded-lg border border-border bg-panel/60 p-3 w-full">
                     <div className="text-[11px] uppercase tracking-wide text-muted w-full text-left">480p / 720p / 1080p</div>
@@ -1067,11 +1071,10 @@ export default function RobotDetailPage() {
                                   (!!numericHeight ? group.height === numericHeight : false) &&
                                   (!!numericFps ? Math.abs(fps - numericFps) <= 1.5 : false);
                                 return (
-                                  <button
+                                  <InlineButton
                                     key={`${group.label}-${fps}`}
-                                    className={`rounded-xl border px-3 py-1 text-xs ${
-                                      active ? "border-accent bg-accent/10" : "border-border bg-transparent text-muted"
-                                    }`}
+                                    className="px-3 py-1"
+                                    active={active}
                                     onClick={() => {
                                       setCameraForm((form) => ({
                                         ...form,
@@ -1081,10 +1084,9 @@ export default function RobotDetailPage() {
                                       }));
                                       setCameraStreamError(null);
                                     }}
-                                    type="button"
                                   >
                                     {fps} FPS
-                                  </button>
+                                  </InlineButton>
                                 );
                               })}
                             </div>
@@ -1096,15 +1098,13 @@ export default function RobotDetailPage() {
                 )}
               </div>
             )}
-            <div className="flex items-center gap-2">
-              <Button variant="ghost" onClick={() => setShowAddCameraModal(false)}>
-                Cancel
-              </Button>
-              <Spacer />
-              <Button variant="primary" onClick={handleSaveCamera} disabled={savingCamera || !selectedCameraId}>
-                {savingCamera ? "Saving..." : "Save camera"}
-              </Button>
-            </div>
+            <ModalActions
+              onCancel={() => setShowAddCameraModal(false)}
+              onConfirm={handleSaveCamera}
+              confirmLabel={savingCamera ? "Saving..." : "Save camera"}
+              confirmVariant="primary"
+              confirmDisabled={savingCamera || !selectedCameraId}
+            />
           </Panel>
         </div>
       )}
@@ -1118,15 +1118,13 @@ export default function RobotDetailPage() {
               and recalibrate it to use it again.
             </Notice>
             <div className="h-px bg-border" />
-            <div className="flex items-center gap-2">
-              <Button variant="ghost" onClick={() => setShowDeleteModal(false)}>
-                Cancel
-              </Button>
-              <Spacer />
-              <Button variant="danger" onClick={handleDelete} disabled={loading}>
-                Delete
-              </Button>
-            </div>
+            <ModalActions
+              onCancel={() => setShowDeleteModal(false)}
+              onConfirm={handleDelete}
+              confirmLabel="Delete"
+              confirmVariant="danger"
+              confirmDisabled={loading}
+            />
           </Panel>
         </div>
       )}
@@ -1139,15 +1137,13 @@ export default function RobotDetailPage() {
               Remove the calibration file for this robot. You can recalibrate later if needed.
             </Notice>
             <div className="h-px bg-border" />
-            <div className="flex items-center gap-2">
-              <Button variant="ghost" onClick={() => setShowDeleteCalibrationModal(false)}>
-                Cancel
-              </Button>
-              <Spacer />
-              <Button variant="danger" onClick={handleDeleteCalibration} disabled={loading}>
-                Delete calibration
-              </Button>
-            </div>
+            <ModalActions
+              onCancel={() => setShowDeleteCalibrationModal(false)}
+              onConfirm={handleDeleteCalibration}
+              confirmLabel="Delete calibration"
+              confirmVariant="danger"
+              confirmDisabled={loading}
+            />
           </Panel>
         </div>
       )}
@@ -1157,23 +1153,21 @@ export default function RobotDetailPage() {
           <Panel className="w-full max-w-lg space-y-4">
             <h3 className="text-lg font-semibold">Rename robot</h3>
             <p className="text-sm text-muted">This also renames the calibration file on disk.</p>
-            <Stack>
+            <Field label="Robot name" className="gap-2">
               <input
                 value={nameInput}
                 onChange={(e) => setNameInput(e.target.value)}
                 placeholder={robot?.name || "Robot name"}
               />
-            </Stack>
+            </Field>
             <div className="h-px bg-border" />
-            <div className="flex items-center gap-2">
-              <Button variant="ghost" onClick={() => setShowRenameModal(false)}>
-                Cancel
-              </Button>
-              <Spacer />
-              <Button variant="warning" onClick={handleRename} disabled={!robot || savingName}>
-                Save
-              </Button>
-            </div>
+            <ModalActions
+              onCancel={() => setShowRenameModal(false)}
+              onConfirm={handleRename}
+              confirmLabel="Save"
+              confirmVariant="warning"
+              confirmDisabled={!robot || savingName}
+            />
           </Panel>
         </div>
       )}
@@ -1193,8 +1187,7 @@ export default function RobotDetailPage() {
                 ? "Choose a calibrated leader arm to control this follower from. Only leaders are listed."
                 : "Choose a calibrated follower arm to control from this leader. Only followers are listed."}
             </p>
-            <Stack>
-              <label>{robot?.role === "follower" ? "Leader" : "Follower"}</label>
+            <Field label={robot?.role === "follower" ? "Leader" : "Follower"}>
               <select
                 value={selectedTeleopPartner}
                 onChange={(e) => setSelectedTeleopPartner(e.target.value)}
@@ -1206,17 +1199,15 @@ export default function RobotDetailPage() {
                   </option>
                 ))}
               </select>
-            </Stack>
+            </Field>
             <div className="h-px bg-border" />
-            <div className="flex items-center gap-2">
-              <Button variant="ghost" onClick={() => setShowTeleopModal(false)}>
-                Cancel
-              </Button>
-              <Spacer />
-              <Button variant="primary" onClick={startTeleopNavigation} disabled={!selectedTeleopPartner}>
-                Start teleop
-              </Button>
-            </div>
+            <ModalActions
+              onCancel={() => setShowTeleopModal(false)}
+              onConfirm={startTeleopNavigation}
+              confirmLabel="Start teleop"
+              confirmVariant="primary"
+              confirmDisabled={!selectedTeleopPartner}
+            />
           </Panel>
         </div>
       )}
